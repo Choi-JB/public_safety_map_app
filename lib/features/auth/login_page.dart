@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../providers/auth_provider.dart';
 
@@ -15,6 +16,21 @@ class _LoginPageState extends State<LoginPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  static const _lastEmailKey = 'last_login_email';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLastEmail();
+  }
+
+  Future<void> _loadLastEmail() async {
+  final prefs = await SharedPreferences.getInstance();
+  final email = prefs.getString(_lastEmailKey);
+  if (email != null && email.isNotEmpty && mounted) {
+    _email.text = email;
+  }
+}
 
   @override
   void dispose() {
@@ -29,6 +45,9 @@ class _LoginPageState extends State<LoginPage> {
     final ok = await auth.login(_email.text.trim(), _password.text);
     if (!mounted) return;
     if (ok) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lastEmailKey, _email.text.trim());
+      if (!mounted) return;
       context.go('/map');
     } else {
       ScaffoldMessenger.of(context).showSnackBar(

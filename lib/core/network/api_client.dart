@@ -21,13 +21,15 @@ class ApiClient {
       connectTimeout: const Duration(seconds: 15),
       receiveTimeout: const Duration(seconds: 20),
       // headers: {'Content-Type': 'application/json'},
-      validateStatus: (code) => code != null && code < 500,
+      validateStatus: (code) => 
+      code != null && code < 500 && code != 401,
     ),
   );
 
   CookieJar? _cookieJar;
   bool _ready = false;
   static const _tokenKey = 'access_token';
+  static const _refreshTokenKey = 'refresh_token';
 
   Future<void> init() async {
     if (_ready) return;
@@ -46,7 +48,8 @@ class ApiClient {
           handler.next(options);
         },
         onError: (err, handler) async {
-          if (err.response?.statusCode == 401) {
+          if (err.response?.statusCode == 401 &&
+          !(err.requestOptions.path.contains('/auth/refresh'))) {
             final refreshed = await _tryRefresh();
             if (refreshed) {
               final req = err.requestOptions;
@@ -75,20 +78,44 @@ class ApiClient {
     }
   }
 
+  Future<void> setRefreshToken(String? token) async {
+    if (token == null || token.isEmpty) {
+      await _storage.delete(key: _refreshTokenKey);
+    } else {
+      await _storage.write(key: _refreshTokenKey, value: token);
+    }
+  }
+
   Future<String?> getAccessToken() => _storage.read(key: _tokenKey);
+  Future<String?> getRefreshToken() => _storage.read(key: _refreshTokenKey);
 
   Future<void> clearSession() async {
     await setAccessToken(null);
+    await setRefreshToken(null);
     await _cookieJar?.deleteAll();
   }
 
   Future<bool> _tryRefresh() async {
     try {
-      final res = await dio.post<Map<String, dynamic>>('/auth/refresh');
+      final refresh = await getRefreshToken();
+      if (refresh == null || refresh.isEmpty) return false;
+
+      final res = await dio.post<Map<String, dynamic>>(
+        '/auth/refresh',
+        data: {'refresh_token': refresh},
+      );
       final data = _unwrap<Map<String, dynamic>>(res);
-      final token = data['access_token'] as String?;
-      if (token == null) return false;
-      await setAccessToken(token);
+
+      /// 엑세스 토큰 갱신
+      final access = data['access_token'] as String?;
+      if (access == null || access.isEmpty) return false;
+      await setAccessToken(access);
+
+      // 백엔드가 refresh도 갱신해 주면 같이 저장
+      final newRefresh = data['refresh_token'] as String?;
+      if (newRefresh != null && newRefresh.isNotEmpty) {
+        await setRefreshToken(newRefresh);
+      }
       return true;
     } catch (_) {
       await clearSession();
@@ -101,7 +128,10 @@ class ApiClient {
     Map<String, dynamic>? query,
     T Function(dynamic raw)? parser,
   }) async {
-    final res = await dio.get<Map<String, dynamic>>(path, queryParameters: query);
+    final res = await dio.get<Map<String, dynamic>>(
+      path,
+      queryParameters: query,
+    );
     return _parse(res, parser);
   }
 
@@ -128,47 +158,48 @@ class ApiClient {
     return _parse(res, parser);
   }
 
-  Future<T> delete<T>(
-    String path, {
-    T Function(dynamic raw)? parser,
-  }) async {
+  Future<T> delete<T>(String path, {T Function(dynamic raw)? parser}) async {
     final res = await dio.delete<Map<String, dynamic>>(path);
     return _parse(res, parser);
   }
 
   /// multipart field name: image
   Future<Map<String, dynamic>> uploadImage(
-  String path,
-  String filePath, {
-  String fieldName = 'image',
-}) async {
-  final form = FormData.fromMap({
-    fieldName: await MultipartFile.fromFile(filePath),
-  });
+    String path,
+    String filePath, {
+    String fieldName = 'image',
+  }) async {
+    final form = FormData.fromMap({
+      fieldName: await MultipartFile.fromFile(filePath),
+    });
 
-  // contentType 지정하지 말 것 — Dio가 multipart + boundary 자동 설정
-  final res = await dio.post<dynamic>(path, data: form);
+    // contentType 지정하지 말 것 — Dio가 multipart + boundary 자동 설정
+    final res = await dio.post<dynamic>(path, data: form);
 
-  final body = res.data;
-  if (body is! Map) {
-    throw ApiException(
-      '이미지 업로드 응답 오류 (${res.statusCode}): $body',
-      statusCode: res.statusCode,
-    );
+    final body = res.data;
+    if (body is! Map) {
+      throw ApiException(
+        '이미지 업로드 응답 오류 (${res.statusCode}): $body',
+        statusCode: res.statusCode,
+      );
+    }
+    final map = Map<String, dynamic>.from(body as Map);
+    if (map['success'] == false ||
+        (res.statusCode != null && res.statusCode! >= 400)) {
+      throw ApiException(
+        (map['message'] as String?) ?? '업로드 실패',
+        statusCode: res.statusCode,
+      );
+    }
+    final data = map['data'];
+    if (data is Map) return Map<String, dynamic>.from(data);
+    throw ApiException('이미지 업로드 data 형식 오류: $data');
   }
-  final map = Map<String, dynamic>.from(body as Map);
-  if (map['success'] == false || (res.statusCode != null && res.statusCode! >= 400)) {
-    throw ApiException(
-      (map['message'] as String?) ?? '업로드 실패',
-      statusCode: res.statusCode,
-    );
-  }
-  final data = map['data'];
-  if (data is Map) return Map<String, dynamic>.from(data);
-  throw ApiException('이미지 업로드 data 형식 오류: $data');
-}
 
-  T _parse<T>(Response<Map<String, dynamic>> res, T Function(dynamic raw)? parser) {
+  T _parse<T>(
+    Response<Map<String, dynamic>> res,
+    T Function(dynamic raw)? parser,
+  ) {
     final raw = _unwrap(res);
     if (parser != null) return parser(raw);
     return raw as T;
@@ -180,7 +211,8 @@ class ApiClient {
       throw ApiException('서버 응답이 비어 있습니다.', statusCode: res.statusCode);
     }
     final success = body['success'];
-    if (success == false || (res.statusCode != null && res.statusCode! >= 400)) {
+    if (success == false ||
+        (res.statusCode != null && res.statusCode! >= 400)) {
       throw ApiException(
         (body['message'] as String?) ?? '요청 실패 (${res.statusCode})',
         statusCode: res.statusCode,
