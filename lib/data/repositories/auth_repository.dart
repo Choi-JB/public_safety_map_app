@@ -8,16 +8,22 @@ class AuthRepository {
   Future<({AuthUser user, String? accessToken})> login({
     required String email,
     required String password,
+
   }) async {
     final data = await _api.post<Map<String, dynamic>>(
       '/auth/login',
-      body: {'email': email, 'password': password},
+      body: {'email': email, 'password': password, 'client':"app"},
     );
     final user = AuthUser.fromJson(data['user'] as Map<String, dynamic>);
     final token = data['access_token'] as String?;
+    final refresh = data['refresh_token'] as String?;
     if (token != null) {
       await _api.setAccessToken(token);
     }
+    if (refresh != null) {
+      await _api.setRefreshToken(refresh);
+    }
+
     return (user: user, accessToken: token);
   }
 
@@ -41,6 +47,7 @@ class AuthRepository {
       await _api.post<dynamic>('/auth/logout');
     } finally {
       await _api.clearSession();
+      
     }
   }
 
