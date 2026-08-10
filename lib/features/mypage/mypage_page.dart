@@ -15,6 +15,7 @@ import '../../data/repositories/mypage_repository.dart';
 import '../../data/repositories/report_repository.dart';
 import '../../providers/auth_provider.dart';
 import '../../widgets/media_image.dart';
+import '../../core/geo/geo_utils.dart';
 
 const _safetyFeelings = ['안전', '보통', '불안'];
 
@@ -150,18 +151,19 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
     if (ok != true || !mounted) return;
     try {
       await context.read<AuthRepository>().changePassword(
-            email: email.text.trim(),
-            password: current.text,
-            newPassword: next.text,
-          );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('비밀번호가 변경되었습니다')),
+        email: email.text.trim(),
+        password: current.text,
+        newPassword: next.text,
       );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('비밀번호가 변경되었습니다')));
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
@@ -197,44 +199,41 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : error != null
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(error!),
+                  const SizedBox(height: 12),
+                  FilledButton(onPressed: _load, child: const Text('다시 시도')),
+                ],
+              ),
+            )
+          : Column(
+              children: [
+                ListTile(
+                  title: Text(auth.user?.nickname ?? '사용자'),
+                  subtitle: Text(auth.user?.email ?? ''),
+                  trailing: Text(
+                    '제보 ${summary?.reportCount ?? 0} · '
+                    '피드백 ${summary?.feedbackCount ?? 0}',
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabs,
                     children: [
-                      Text(error!),
-                      const SizedBox(height: 12),
-                      FilledButton(onPressed: _load, child: const Text('다시 시도')),
+                      _ReportList(reports: reports, onTap: _openReportDetail),
+                      _FeedbackList(
+                        feedbacks: feedbacks,
+                        onTap: _openFeedbackDetail,
+                      ),
                     ],
                   ),
-                )
-              : Column(
-                  children: [
-                    ListTile(
-                      title: Text(auth.user?.nickname ?? '사용자'),
-                      subtitle: Text(auth.user?.email ?? ''),
-                      trailing: Text(
-                        '제보 ${summary?.reportCount ?? 0} · '
-                        '피드백 ${summary?.feedbackCount ?? 0}',
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabs,
-                        children: [
-                          _ReportList(
-                            reports: reports,
-                            onTap: _openReportDetail,
-                          ),
-                          _FeedbackList(
-                            feedbacks: feedbacks,
-                            onTap: _openFeedbackDetail,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
                 ),
+              ],
+            ),
     );
   }
 }
@@ -295,9 +294,7 @@ class _FeedbackList extends StatelessWidget {
         return ListTile(
           title: Text(f.safetyFeeling ?? '피드백'),
           subtitle: Text(
-            (f.comment?.isNotEmpty == true)
-                ? f.comment!
-                : f.tags.join(', '),
+            (f.comment?.isNotEmpty == true) ? f.comment! : f.tags.join(', '),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
@@ -361,16 +358,16 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
   Future<void> _save() async {
     final id = _toIntId(widget.report.id);
     if (id == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('유효하지 않은 제보 ID입니다')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('유효하지 않은 제보 ID입니다')));
       return;
     }
     final desc = _desc.text.trim();
     if (desc.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('설명을 입력해 주세요')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('설명을 입력해 주세요')));
       return;
     }
 
@@ -391,17 +388,15 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context, true);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('제보가 수정되었습니다')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('제보가 수정되었습니다')));
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -422,9 +417,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
             child: const Text('취소'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: MapUiColors.report,
-            ),
+            style: FilledButton.styleFrom(backgroundColor: MapUiColors.report),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('삭제'),
           ),
@@ -439,17 +432,15 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context, true);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('제보가 삭제되었습니다')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('제보가 삭제되었습니다')));
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -467,121 +458,141 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-            Text(
-              r.type ?? '제보',
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
+          Text(
+            r.type ?? '제보',
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            [
+              if (r.createdAt != null) r.createdAt!.split('T').first,
+              if (r.lat != null && r.lng != null)
+                '${r.lat!.toStringAsFixed(5)}, ${r.lng!.toStringAsFixed(5)}',
+            ].join(' · '),
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 16),
+          if (_editing) ...[
+            TextField(
+              controller: _desc,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: '설명',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              [
-                if (r.createdAt != null) r.createdAt!.split('T').first,
-                if (r.lat != null && r.lng != null)
-                  '${r.lat!.toStringAsFixed(5)}, ${r.lng!.toStringAsFixed(5)}',
-              ].join(' · '),
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.grey.shade600,
-              ),
+            const SizedBox(height: 12),
+            _ImageEditBlock(
+              remoteUrl: _clearImage ? null : _currentImgUrl,
+              localPath: _localImagePath,
+              onPick: _pickImage,
+              onClear: () => setState(() {
+                _localImagePath = null;
+                _clearImage = true;
+                _currentImgUrl = null;
+              }),
             ),
-            const SizedBox(height: 16),
-            if (_editing) ...[
-              TextField(
-                controller: _desc,
-                maxLines: 5,
-                decoration: const InputDecoration(
-                  labelText: '설명',
-                  alignLabelWithHint: true,
-                  border: OutlineInputBorder(),
-                ),
-              ),
+            const SizedBox(height: 8),
+            Text(
+              '유형·위치는 수정할 수 없습니다.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ] else ...[
+            Text(
+              (r.description ?? '').isEmpty ? '(설명 없음)' : r.description!,
+              style: const TextStyle(fontSize: 15, height: 1.4),
+            ),
+            if (resolveMediaUrl(_currentImgUrl) != null) ...[
               const SizedBox(height: 12),
-              _ImageEditBlock(
-                remoteUrl: _clearImage ? null : _currentImgUrl,
-                localPath: _localImagePath,
-                onPick: _pickImage,
-                onClear: () => setState(() {
-                  _localImagePath = null;
-                  _clearImage = true;
-                  _currentImgUrl = null;
-                }),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '유형·위치는 수정할 수 없습니다.',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-              ),
-            ] else ...[
-              Text(
-                (r.description ?? '').isEmpty ? '(설명 없음)' : r.description!,
-                style: const TextStyle(fontSize: 15, height: 1.4),
-              ),
-              if (resolveMediaUrl(_currentImgUrl) != null) ...[
-                const SizedBox(height: 12),
-                MediaCoverImage(url: _currentImgUrl, expanded: true),
-              ],
+              MediaCoverImage(url: _currentImgUrl, expanded: true),
             ],
-            const SizedBox(height: 20),
-            if (_busy)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(12),
-                  child: CircularProgressIndicator(),
-                ),
-              )
-            else if (_editing)
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        setState(() {
-                          _editing = false;
-                          _desc.text = r.description ?? '';
-                          _localImagePath = null;
-                          _clearImage = false;
-                          _currentImgUrl = r.imgUrl;
-                        });
-                      },
-                      child: const Text('취소'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: _save,
-                      child: const Text('저장'),
-                    ),
-                  ),
-                ],
-              )
-            else
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => setState(() => _editing = true),
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                      label: const Text('수정'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: MapUiColors.report,
-                      ),
-                      onPressed: _delete,
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      label: const Text('삭제'),
-                    ),
-                  ),
-                ],
-              ),
           ],
-        ),
+          /// 제보 위치로 이동 버튼
+          if (!_editing && !_busy) ...[
+            OutlinedButton.icon(
+              onPressed: () {
+                final p = tryLatLng(r.lat, r.lng);
+                if (p == null) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('위치 정보가 없습니다')));
+                  return;
+                }
+                Navigator.pop(context); // 시트 닫기
+                context.push(
+                  '/map',
+                  extra: MapFocusTarget(
+                    lat: p.latitude,
+                    lng: p.longitude,
+                    reportId: _toIntId(r.id),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.map_outlined, size: 18),
+              label: const Text('제보 위치로 이동'),
+            ),
+            const SizedBox(height: 12),
+          ],
+          const SizedBox(height: 20),
+          if (_busy)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_editing)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      setState(() {
+                        _editing = false;
+                        _desc.text = r.description ?? '';
+                        _localImagePath = null;
+                        _clearImage = false;
+                        _currentImgUrl = r.imgUrl;
+                      });
+                    },
+                    child: const Text('취소'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: _save,
+                    child: const Text('저장'),
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => setState(() => _editing = true),
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: const Text('수정'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: MapUiColors.report,
+                    ),
+                    onPressed: _delete,
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    label: const Text('삭제'),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
     );
   }
 }
@@ -640,9 +651,9 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
   Future<void> _save() async {
     final id = widget.feedback.id;
     if (id <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('유효하지 않은 피드백 ID입니다')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('유효하지 않은 피드백 ID입니다')));
       return;
     }
 
@@ -664,17 +675,15 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context, true);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('피드백이 수정되었습니다')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('피드백이 수정되었습니다')));
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -695,9 +704,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
             child: const Text('취소'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: MapUiColors.report,
-            ),
+            style: FilledButton.styleFrom(backgroundColor: MapUiColors.report),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('삭제'),
           ),
@@ -712,17 +719,15 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context, true);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('피드백이 삭제되었습니다')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('피드백이 삭제되었습니다')));
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -739,150 +744,147 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-            Text(
-              f.safetyFeeling ?? '피드백',
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
+          Text(
+            f.safetyFeeling ?? '피드백',
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            f.createdAt?.split('T').first ?? '',
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          ),
+          if (f.tags.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: f.tags
+                  .map(
+                    (t) => Chip(
+                      label: Text(t, style: const TextStyle(fontSize: 12)),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  )
+                  .toList(),
+            ),
+          ],
+          const SizedBox(height: 16),
+          if (_editing) ...[
+            DropdownButtonFormField<String>(
+              // ignore: deprecated_member_use
+              value: _feeling,
+              items: _safetyFeelings
+                  .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) setState(() => _feeling = v);
+              },
+              decoration: const InputDecoration(
+                labelText: '안전감',
+                border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              f.createdAt?.split('T').first ?? '',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _comment,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: '코멘트',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            _ImageEditBlock(
+              remoteUrl: _clearImage ? null : _currentImgUrl,
+              localPath: _localImagePath,
+              onPick: _pickImage,
+              onClear: () => setState(() {
+                _localImagePath = null;
+                _clearImage = true;
+                _currentImgUrl = null;
+              }),
             ),
             if (f.tags.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: f.tags
-                    .map(
-                      (t) => Chip(
-                        label: Text(t, style: const TextStyle(fontSize: 12)),
-                        visualDensity: VisualDensity.compact,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    )
-                    .toList(),
-              ),
-            ],
-            const SizedBox(height: 16),
-            if (_editing) ...[
-              DropdownButtonFormField<String>(
-                // ignore: deprecated_member_use
-                value: _feeling,
-                items: _safetyFeelings
-                    .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _feeling = v);
-                },
-                decoration: const InputDecoration(
-                  labelText: '안전감',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _comment,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: '코멘트',
-                  alignLabelWithHint: true,
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              _ImageEditBlock(
-                remoteUrl: _clearImage ? null : _currentImgUrl,
-                localPath: _localImagePath,
-                onPick: _pickImage,
-                onClear: () => setState(() {
-                  _localImagePath = null;
-                  _clearImage = true;
-                  _currentImgUrl = null;
-                }),
-              ),
-              if (f.tags.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  '태그는 이 화면에서 수정할 수 없습니다.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                ),
-              ],
-            ] else ...[
+              const SizedBox(height: 8),
               Text(
-                (f.comment ?? '').isEmpty ? '(코멘트 없음)' : f.comment!,
-                style: const TextStyle(fontSize: 15, height: 1.4),
+                '태그는 이 화면에서 수정할 수 없습니다.',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
-              if (resolveMediaUrl(_currentImgUrl) != null) ...[
-                const SizedBox(height: 12),
-                MediaCoverImage(url: _currentImgUrl, expanded: true),
-              ],
             ],
-            const SizedBox(height: 20),
-            if (_busy)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(12),
-                  child: CircularProgressIndicator(),
-                ),
-              )
-            else if (_editing)
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        setState(() {
-                          _editing = false;
-                          _comment.text = f.comment ?? '';
-                          _feeling = _safetyFeelings.contains(f.safetyFeeling)
-                              ? f.safetyFeeling!
-                              : _safetyFeelings[1];
-                          _localImagePath = null;
-                          _clearImage = false;
-                          _currentImgUrl = f.imgUrl;
-                        });
-                      },
-                      child: const Text('취소'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: _save,
-                      child: const Text('저장'),
-                    ),
-                  ),
-                ],
-              )
-            else
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => setState(() => _editing = true),
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                      label: const Text('수정'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: MapUiColors.report,
-                      ),
-                      onPressed: _delete,
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      label: const Text('삭제'),
-                    ),
-                  ),
-                ],
-              ),
+          ] else ...[
+            Text(
+              (f.comment ?? '').isEmpty ? '(코멘트 없음)' : f.comment!,
+              style: const TextStyle(fontSize: 15, height: 1.4),
+            ),
+            if (resolveMediaUrl(_currentImgUrl) != null) ...[
+              const SizedBox(height: 12),
+              MediaCoverImage(url: _currentImgUrl, expanded: true),
+            ],
           ],
-        ),
+          const SizedBox(height: 20),
+          if (_busy)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_editing)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      setState(() {
+                        _editing = false;
+                        _comment.text = f.comment ?? '';
+                        _feeling = _safetyFeelings.contains(f.safetyFeeling)
+                            ? f.safetyFeeling!
+                            : _safetyFeelings[1];
+                        _localImagePath = null;
+                        _clearImage = false;
+                        _currentImgUrl = f.imgUrl;
+                      });
+                    },
+                    child: const Text('취소'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: _save,
+                    child: const Text('저장'),
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => setState(() => _editing = true),
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: const Text('수정'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: MapUiColors.report,
+                    ),
+                    onPressed: _delete,
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    label: const Text('삭제'),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
     );
   }
 }
