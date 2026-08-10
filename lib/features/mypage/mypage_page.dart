@@ -637,6 +637,9 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
   String? _localImagePath;
   bool _clearImage = false;
   late String? _currentImgUrl;
+  List<FeedbackTag> _allTags = [];
+  final Set<int> _selectedTagIds = {};
+  bool _tagsLoading = true;
 
   @override
   void initState() {
@@ -647,6 +650,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
         ? f.safetyFeeling!
         : _safetyFeelings[1];
     _currentImgUrl = f.imgUrl;
+    _loadTags();
   }
 
   @override
@@ -654,6 +658,29 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
     _comment.dispose();
     super.dispose();
   }
+
+  Future<void> _loadTags() async {
+  try {
+    final list = await context.read<FeedbackRepository>().fetchTags();
+    if (!mounted) return;
+    final names = widget.feedback.tags.map((e) => e.trim()).toSet();
+    setState(() {
+      _allTags = list.where((t) => t.id > 0 && t.name.isNotEmpty).toList();
+      _selectedTagIds
+        ..clear()
+        ..addAll(
+          _allTags.where((t) => names.contains(t.name)).map((t) => t.id),
+        );
+      _tagsLoading = false;
+    });
+  } catch (_) {
+    if (!mounted) return;
+    setState(() {
+      _allTags = [];
+      _tagsLoading = false;
+    });
+  }
+}
 
   Future<void> _pickImage() async {
     final file = await ImagePicker().pickImage(
@@ -670,15 +697,15 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
     }
   }
 
-  Future<void> _save() async {
-    final id = widget.feedback.id;
-    if (id <= 0) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('유효하지 않은 피드백 ID입니다')));
-      return;
-    }
-
+    Future<void> _save() async {
+      final id = widget.feedback.id;
+      if (id <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('유효하지 않은 피드백 ID입니다')),
+        );
+        return;
+      }
+    
     setState(() => _busy = true);
     try {
       final repo = context.read<FeedbackRepository>();
@@ -693,6 +720,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
         comment: _comment.text.trim(),
         imgUrl: imgUrl,
         clearImage: _clearImage && _localImagePath == null,
+        tagIds: _selectedTagIds.toList()..sort(),
       );
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
@@ -819,6 +847,67 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                 border: OutlineInputBorder(),
               ),
             ),
+                        const SizedBox(height: 12),
+            const Text(
+              '태그',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+            const SizedBox(height: 8),
+            if (_tagsLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              )
+            else if (_allTags.isEmpty)
+              Text(
+                '등록된 태그가 없습니다',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: _allTags.map((t) {
+                  final selected = _selectedTagIds.contains(t.id);
+                  return FilterChip(
+                    label: Text(
+                      t.name,
+                      style: TextStyle(
+                        color: selected
+                            ? MapUiColors.accent
+                            : const Color(0xFF0F172A),
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
+                      ),
+                    ),
+                    selected: selected,
+                    backgroundColor: Colors.white,
+                    selectedColor: MapUiColors.accentSoft,
+                    checkmarkColor: MapUiColors.accent,
+                    side: BorderSide(
+                      color: selected
+                          ? MapUiColors.accent
+                          : const Color(0xFFCBD5E1),
+                    ),
+                    onSelected: (v) {
+                      setState(() {
+                        if (v) {
+                          _selectedTagIds.add(t.id);
+                        } else {
+                          _selectedTagIds.remove(t.id);
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+            const SizedBox(height: 12),
             const SizedBox(height: 12),
             _ImageEditBlock(
               remoteUrl: _clearImage ? null : _currentImgUrl,
@@ -830,13 +919,6 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                 _currentImgUrl = null;
               }),
             ),
-            if (f.tags.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                '태그는 이 화면에서 수정할 수 없습니다.',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-              ),
-            ],
           ] else ...[
             Text(
               (f.comment ?? '').isEmpty ? '(코멘트 없음)' : f.comment!,
