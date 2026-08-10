@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/config/env.dart';
 import '../../core/config/media_url.dart';
@@ -42,7 +43,8 @@ String _accidentChipLabel(MapProvider map) {
 }
 
 class MapPage extends StatefulWidget {
-  const MapPage({super.key});
+  const MapPage({super.key, this.focus});
+  final MapFocusTarget? focus;
 
   @override
   State<MapPage> createState() => _MapPageState();
@@ -54,11 +56,14 @@ class _MapPageState extends State<MapPage>
   final _searchCtrl = TextEditingController();
   bool _booted = false;
   bool _searching = false;
+
   /// FlutterMap 재마운트용 (카메라 NaN 복구)
   int _mapGeneration = 0;
   bool _remountingMap = false;
+
   /// layout 준비 전 deferred move
   (LatLng, double, Offset)? _pendingMove;
+
   /// pan/zoom 종료 후 격자·제보·행사 재조회 debounce
   Timer? _viewportDebounce;
   static const _viewportDebounceMs = 700;
@@ -79,8 +84,10 @@ class _MapPageState extends State<MapPage>
   final ValueNotifier<_MyLocPaint> _myLocPaint =
       ValueNotifier(const _MyLocPaint());
   StreamSubscription<Position>? _posSub;
+
   /// 정지 중에도 새 제보 감지 (위치 필터만으로는 부족)
   Timer? _nearbyAlertTimer;
+
   /// 알림 탭 → 해당 제보 열기
   StreamSubscription<int>? _openReportSub;
   StreamSubscription<AccidentZoneItem>? _openAccidentSub;
@@ -99,8 +106,10 @@ class _MapPageState extends State<MapPage>
   VoidCallback? _routeListener;
 
   MapPanelTab _panelTab = MapPanelTab.grid;
+
   /// 하단 패널 높이(px). null 이면 접힘(헤더만).
   double? _panelHeightPx;
+
   /// 드래그 중이면 높이 애니 끄기
   bool _panelDragging = false;
 
@@ -465,6 +474,42 @@ class _MapPageState extends State<MapPage>
     if (pendingAcc != null) {
       await _openAccidentZone(pendingAcc);
     }
+
+    /// 맵 포커스 전달 받은 경우 (마이페이지 → 제보/피드백 위치)
+    final focus = widget.focus;
+    if (focus != null) {
+      final p = tryLatLng(focus.lat, focus.lng);
+      if (p != null) {
+        _focusMapOn(p, zoom: 16);
+        await _loadAround(p, 16);
+      }
+
+      /// 주변 로드 후 같은 id가 있으면 선택 (없어도 좌표 이동만으로 OK)
+      final id = focus.reportId;
+      if (id != null && mounted) {
+        final map = context.read<MapProvider>();
+        for (final item in map.reports) {
+          if (item.id == id) {
+            _selectReport(item, moveMap: true);
+            break;
+          }
+        }
+      }
+
+      //피드백 -> 격자
+      final gridId = focus.gridId;
+      if (gridId != null && mounted) {
+        await _onGridTap(gridId);
+        if(!mounted) return;
+        final detail = context.read<MapProvider>().selectedGridDetail;
+        final gp = tryLatLng(detail?.lat, detail?.lng);
+        if(gp != null) {
+          _focusMapOn(gp, zoom: 16);
+          await _loadAround(gp, 16);
+        }
+      }
+      
+    }
   }
 
   /// 알림에서 선택한 제보를 지도에서 열고 선택 상태 표시
@@ -497,9 +542,9 @@ class _MapPageState extends State<MapPage>
 
     if (!mounted) return;
     if (r == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('해당 제보를 찾을 수 없습니다')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('해당 제보를 찾을 수 없습니다')));
       return;
     }
     _selectReport(r, moveMap: true);
@@ -550,9 +595,7 @@ class _MapPageState extends State<MapPage>
     if (!mounted) return;
     // 감시 ON이면 NearbyMonitor 가 전담 (중복 FGS·검사 방지)
     if (context.read<NearbyMonitor>().enabled) return;
-    unawaited(
-      context.read<NearbyReportAlert>().checkNear(me, force: force),
-    );
+    unawaited(context.read<NearbyReportAlert>().checkNear(me, force: force));
   }
 
   /// 위험구간 ON/OFF + (ON 시) GPS 기준 즉시 알림 검사
@@ -560,9 +603,7 @@ class _MapPageState extends State<MapPage>
     context.read<MapProvider>().toggleAccidentZones();
     final me = _myPos;
     if (me != null) {
-      unawaited(
-        context.read<NearbyReportAlert>().checkNear(me, force: true),
-      );
+      unawaited(context.read<NearbyReportAlert>().checkNear(me, force: true));
     }
   }
 
@@ -578,9 +619,7 @@ class _MapPageState extends State<MapPage>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          wasOn
-              ? '주변 제보 감시를 껐습니다'
-              : '주변 제보 감시 ON · 백그라운드에서도 400m 안 제보를 알립니다',
+          wasOn ? '주변 제보 감시를 껐습니다' : '주변 제보 감시 ON · 백그라운드에서도 400m 안 제보를 알립니다',
         ),
       ),
     );
@@ -622,10 +661,8 @@ class _MapPageState extends State<MapPage>
     _remountingMap = true;
 
     final mp = context.read<MapProvider>();
-    final center = tryLatLng(
-          preferCenter?.latitude,
-          preferCenter?.longitude,
-        ) ??
+    final center =
+        tryLatLng(preferCenter?.latitude, preferCenter?.longitude) ??
         coerceLatLng(mp.center.latitude, mp.center.longitude);
     final zoom = safeZoom(preferZoom ?? mp.zoom);
 
@@ -650,11 +687,11 @@ class _MapPageState extends State<MapPage>
   }
 
   void _ensureCameraHealthyOrRemount(MapCamera cam) {
-    final centerOk =
-        isValidLatLng(cam.center.latitude, cam.center.longitude);
+    final centerOk = isValidLatLng(cam.center.latitude, cam.center.longitude);
     final zoomOk = cam.zoom.isFinite;
     final size = cam.nonRotatedSize;
-    final sizeOk = size.width.isFinite &&
+    final sizeOk =
+        size.width.isFinite &&
         size.height.isFinite &&
         size.width > 2 &&
         size.height > 2;
@@ -682,8 +719,7 @@ class _MapPageState extends State<MapPage>
     );
     var z = 14.0;
 
-    final hasLocation =
-        await _ensureLocationPermission(request: true);
+    final hasLocation = await _ensureLocationPermission(request: true);
     if (hasLocation && mounted) {
       try {
         final pos = await Geolocator.getCurrentPosition(
@@ -736,12 +772,12 @@ class _MapPageState extends State<MapPage>
     if (!mounted) return;
     context.read<MapProvider>().setZoom(z);
     await context.read<MapProvider>().refreshFromViewport(
-          swLat: swLat,
-          swLng: swLng,
-          neLat: neLat,
-          neLng: neLng,
-          newCenter: safeCenter,
-        );
+      swLat: swLat,
+      swLng: swLng,
+      neLat: neLat,
+      neLng: neLng,
+      newCenter: safeCenter,
+    );
   }
 
   /// 제스처(MapEventMoveEnd) 전용 — 700ms 안 추가 이동이면 마지막 좌표만 조회
@@ -763,9 +799,9 @@ class _MapPageState extends State<MapPage>
     final serviceOn = await Geolocator.isLocationServiceEnabled();
     if (!serviceOn) {
       if (mounted && request) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('위치 서비스가 꺼져 있습니다')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('위치 서비스가 꺼져 있습니다')));
       }
       return false;
     }
@@ -776,9 +812,9 @@ class _MapPageState extends State<MapPage>
     if (p == LocationPermission.denied ||
         p == LocationPermission.deniedForever) {
       if (mounted && request) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('위치 권한이 필요합니다')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('위치 권한이 필요합니다')));
       }
       return false;
     }
@@ -831,9 +867,9 @@ class _MapPageState extends State<MapPage>
     if (!mounted) return;
     final latLng = _displayPos ?? _myPos;
     if (latLng == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('위치를 가져오지 못했습니다')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('위치를 가져오지 못했습니다')));
       return;
     }
     // 5-B: 1회 센터 + 따라가기 ON
@@ -851,9 +887,9 @@ class _MapPageState extends State<MapPage>
     if (!mounted) return;
     setState(() => _searching = false);
     if (point == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('검색 결과가 없습니다')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('검색 결과가 없습니다')));
       return;
     }
     _safeMapMove(point, 14);
@@ -874,8 +910,9 @@ class _MapPageState extends State<MapPage>
       _myError = null;
     });
     try {
-      final list =
-          await context.read<MyPageRepository>().fetchReports(limit: 30);
+      final list = await context.read<MyPageRepository>().fetchReports(
+        limit: 30,
+      );
       if (!mounted) return;
       setState(() {
         _myReports = list;
@@ -929,9 +966,9 @@ class _MapPageState extends State<MapPage>
           for (final e in map.events) {
             if (e.id == _selectedEventId) {
               hasSelection = true;
-              hasDescription =
-                  formatEventDescription(e.description ?? e.title ?? '')
-                      .isNotEmpty;
+              hasDescription = formatEventDescription(
+                e.description ?? e.title ?? '',
+              ).isNotEmpty;
               break;
             }
           }
@@ -1007,8 +1044,7 @@ class _MapPageState extends State<MapPage>
   ) {
     _onUserActivity();
     final open = _defaultOpenHeight(screenH, map);
-    final cur = _panelHeightPx ??
-        (_panelExpanded ? open : _collapsedBarH);
+    final cur = _panelHeightPx ?? (_panelExpanded ? open : _collapsedBarH);
     // 위로 드래그(dy < 0) → 확대. 높이는 접힘~기본 펼침 사이만
     _setPanelHeight(cur - details.delta.dy, openH: open, drag: true);
   }
@@ -1314,92 +1350,204 @@ class _MapPageState extends State<MapPage>
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.publicsafetymap.app',
               ),
-              if (map.gridsVisible)
-                PolygonLayer(
-                  polygons: [
-                      for (final g in map.displayGrids)
-                        if (isValidLatLng(g.lat, g.lng))
-                        Polygon(
-                          points: _cellCorners(g.lat!, g.lng!),
-                          color: gradeColor(g.safetyGrade),
-                            borderColor: gradeBorderColor(g.safetyGrade),
-                            borderStrokeWidth: 0.9,
-                        ),
-                  ],
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('종료'),
+              ),
+            ],
+          ),
+        );
+        if (shouldExit == true && context.mounted) {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF1F5F9),
+        body: Stack(
+          children: [
+            // 맵
+            Positioned.fill(
+              child: FlutterMap(
+                key: ValueKey<int>(_mapGeneration),
+                mapController: _mapController,
+                options: MapOptions(
+                  initialCenter: coerceLatLng(
+                    map.center.latitude,
+                    map.center.longitude,
+                  ),
+                  initialZoom: safeZoom(map.zoom),
+                  minZoom: kMapMinZoom,
+                  maxZoom: kMapMaxZoom,
+                  interactionOptions: const InteractionOptions(
+                    // 두 손가락 회전 시 타일·폴리곤 부하 증가 → 비활성
+                    flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                  ),
+                  onMapEvent: (e) {
+                    // 카메라 붕괴 조기 감지 → remount (TileLayer NaN 예방)
+                    _ensureCameraHealthyOrRemount(e.camera);
+
+                    if (e is MapEventMoveEnd) {
+                      final cam = e.camera;
+                      if (!_cameraHealthy()) return;
+                      final c = tryLatLng(
+                        cam.center.latitude,
+                        cam.center.longitude,
+                      );
+                      final z = safeZoom(cam.zoom);
+                      if (c == null) return;
+                      context.read<MapProvider>().setZoom(z);
+                      context.read<MapProvider>().setCenter(c);
+                      // 연속 팬/줌 → 마지막 뷰만 700ms 후 조회 (격자 등 리빌드 절약)
+                      _scheduleLoadAround(c, z);
+                    }
+                  },
+                  onTap: (_, latLng) {
+                    if (!isValidLatLng(latLng.latitude, latLng.longitude)) {
+                      return;
+                    }
+                    _clearFeatureSelection();
+                    final mp = context.read<MapProvider>();
+                    GridItem? hit;
+                    var best = double.infinity;
+                    for (final g in mp.displayGrids) {
+                      if (!isValidLatLng(g.lat, g.lng)) continue;
+                      final d =
+                          (g.lat! - latLng.latitude).abs() +
+                          (g.lng! - latLng.longitude).abs();
+                      if (d < best) {
+                        best = d;
+                        hit = g;
+                      }
+                    }
+                    if (hit != null &&
+                        best.isFinite &&
+                        best < Env.gridCellDeg) {
+                      _onGridTap(hit.gridId);
+                    }
+                  },
                 ),
-              if (map.accidentZonesVisible)
-                PolygonLayer(
-                  polygons: [
-                      for (final z in map.displayAccidentZones)
-                        if (z.path.where((p) => isValidLatLng(p.lat, p.lng)).length >=
-                            3)
-                        Polygon(
-                            points: [
-                              for (final p in z.path)
-                                if (isValidLatLng(p.lat, p.lng))
-                                  LatLng(p.lat, p.lng),
-                            ],
-                            color: accidentZoneColor(z.type)
-                                .withValues(alpha: 0.25),
-                            borderColor: accidentZoneColor(z.type)
-                                .withValues(alpha: 0.9),
-                            borderStrokeWidth: 2,
-                        ),
-                  ],
-                ),
-              MarkerLayer(
-                markers: [
-                    // 제보: 핀 + 선택 시 사진 말풍선
-                  for (final r in map.reports)
-                      if (tryLatLng(r.lat, r.lng) case final point?)
-                      Marker(
-                          point: point,
-                          width: (r.id == _selectedReportId &&
-                                  resolveMediaUrl(r.imgUrl) != null)
-                              ? kFeatureBubbleMarkerWidth
-                              : kFeaturePinMarkerSize,
-                          height: (r.id == _selectedReportId &&
-                                  resolveMediaUrl(r.imgUrl) != null)
-                              ? kFeatureBubbleMarkerHeight
-                              : kFeaturePinMarkerSize,
-                          alignment: Alignment.bottomCenter,
-                          child: ReportMapMarker(
-                            type: r.type,
-                            imgUrl: r.imgUrl,
-                            selected: r.id == _selectedReportId,
-                            onTap: () => _selectReport(r, moveMap: true),
-                            onCloseBubble: _clearFeatureSelection,
+                children: [
+                  TileLayer(
+                    urlTemplate:
+                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.publicsafetymap.app',
+                  ),
+                  if (map.gridsVisible)
+                    PolygonLayer(
+                      polygons: [
+                        for (final g in map.displayGrids)
+                          if (isValidLatLng(g.lat, g.lng))
+                            Polygon(
+                              points: _cellCorners(g.lat!, g.lng!),
+                              color: gradeColor(g.safetyGrade),
+                              borderColor: gradeBorderColor(g.safetyGrade),
+                              borderStrokeWidth: 0.9,
+                            ),
+                      ],
+                    ),
+                  if (map.accidentZonesVisible)
+                    PolygonLayer(
+                      polygons: [
+                        for (final z in map.displayAccidentZones)
+                          if (z.path
+                                  .where((p) => isValidLatLng(p.lat, p.lng))
+                                  .length >=
+                              3)
+                            Polygon(
+                              points: [
+                                for (final p in z.path)
+                                  if (isValidLatLng(p.lat, p.lng))
+                                    LatLng(p.lat, p.lng),
+                              ],
+                              color: accidentZoneColor(
+                                z.type,
+                              ).withValues(alpha: 0.25),
+                              borderColor: accidentZoneColor(
+                                z.type,
+                              ).withValues(alpha: 0.9),
+                              borderStrokeWidth: 2,
+                            ),
+                      ],
+                    ),
+                  MarkerLayer(
+                    markers: [
+                      // 제보: 핀 + 선택 시 사진 말풍선
+                      for (final r in map.reports)
+                        if (tryLatLng(r.lat, r.lng) case final point?)
+                          Marker(
+                            point: point,
+                            width:
+                                (r.id == _selectedReportId &&
+                                    resolveMediaUrl(r.imgUrl) != null)
+                                ? kFeatureBubbleMarkerWidth
+                                : kFeaturePinMarkerSize,
+                            height:
+                                (r.id == _selectedReportId &&
+                                    resolveMediaUrl(r.imgUrl) != null)
+                                ? kFeatureBubbleMarkerHeight
+                                : kFeaturePinMarkerSize,
+                            alignment: Alignment.bottomCenter,
+                            child: ReportMapMarker(
+                              type: r.type,
+                              imgUrl: r.imgUrl,
+                              selected: r.id == _selectedReportId,
+                              onTap: () => _selectReport(r, moveMap: true),
+                              onCloseBubble: _clearFeatureSelection,
+                            ),
                           ),
-                        ),
-                    // 행사: 동일 패턴 (분홍 핀 + 말풍선)
-                  for (final e in map.events)
-                      if (tryLatLng(e.lat, e.lng) case final point?)
-                      Marker(
-                          point: point,
-                          width: (e.id == _selectedEventId &&
-                                  resolveMediaUrl(e.imgUrl) != null)
-                              ? kFeatureBubbleMarkerWidth
-                              : kFeaturePinMarkerSize,
-                          height: (e.id == _selectedEventId &&
-                                  resolveMediaUrl(e.imgUrl) != null)
-                              ? kFeatureBubbleMarkerHeight
-                              : kFeaturePinMarkerSize,
-                          alignment: Alignment.bottomCenter,
-                          child: EventMapMarker(
-                            type: e.type,
-                            title: e.title,
-                            imgUrl: e.imgUrl,
-                            selected: e.id == _selectedEventId,
-                            onTap: () => _selectEvent(e, moveMap: true),
-                            onCloseBubble: _clearFeatureSelection,
+                      // 행사: 동일 패턴 (분홍 핀 + 말풍선)
+                      for (final e in map.events)
+                        if (tryLatLng(e.lat, e.lng) case final point?)
+                          Marker(
+                            point: point,
+                            width:
+                                (e.id == _selectedEventId &&
+                                    resolveMediaUrl(e.imgUrl) != null)
+                                ? kFeatureBubbleMarkerWidth
+                                : kFeaturePinMarkerSize,
+                            height:
+                                (e.id == _selectedEventId &&
+                                    resolveMediaUrl(e.imgUrl) != null)
+                                ? kFeatureBubbleMarkerHeight
+                                : kFeaturePinMarkerSize,
+                            alignment: Alignment.bottomCenter,
+                            child: EventMapMarker(
+                              type: e.type,
+                              title: e.title,
+                              imgUrl: e.imgUrl,
+                              selected: e.id == _selectedEventId,
+                              onTap: () => _selectEvent(e, moveMap: true),
+                              onCloseBubble: _clearFeatureSelection,
+                            ),
                           ),
-                        ),
-                    // 인프라: CCTV는 줌별 클러스터, 나머지 개별
-                    for (final p in buildInfraMapPoints(
-                      items: map.displayInfras,
-                      zoom: map.zoom,
-                    ))
-                      if (p.latLng case final point?)
+                      // 인프라: CCTV는 줌별 클러스터, 나머지 개별
+                      for (final p in buildInfraMapPoints(
+                        items: map.displayInfras,
+                        zoom: map.zoom,
+                      ))
+                        if (p.latLng case final point?)
+                          Marker(
+                            point: point,
+                            width: p.isCluster ? 40 : 26,
+                            height: p.isCluster ? 40 : 26,
+                            alignment: Alignment.center,
+                            child: p.isCluster
+                                ? GestureDetector(
+                                    onTap: () {
+                                      // 한 단계 확대 → 셀이 쪼개지며 상세 확인
+                                      final z = safeZoom(map.zoom + 1.2);
+                                      _safeMapMove(point, z);
+                                    },
+                                    child: CctvClusterBadge(count: p.count),
+                                  )
+                                : Icon(
+                                    _infraIcon(p.item?.type),
+                                    color: infraMarkerColor(p.item?.type),
+                                    size: 20,
+                                  ),
+                          ),
+                      // 내 위치 (실시간)
+                      if (_myPos != null)
                         Marker(
                           point: point,
                           width: p.isCluster ? 40 : 26,
@@ -1444,9 +1592,7 @@ class _MapPageState extends State<MapPage>
                   );
                 },
               ),
-            ],
-          ),
-          ),
+            ),
 
           // 상단 바: 내정보 + 검색 + 칩
           SafeArea(
@@ -1485,69 +1631,78 @@ class _MapPageState extends State<MapPage>
                                         color: Color(0xFF64748B),
                                         fontSize: 15,
                                       ),
-                                      border: InputBorder.none,
-                                      enabledBorder: InputBorder.none,
-                                      focusedBorder: InputBorder.none,
-                                      filled: false,
-                                      isDense: true,
-                                      contentPadding: EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 10,
+                                      cursorColor: MapUiColors.accent,
+                                      decoration: const InputDecoration(
+                                        hintText: '장소 검색',
+                                        hintStyle: TextStyle(
+                                          color: Color(0xFF64748B),
+                                          fontSize: 15,
+                                        ),
+                                        border: InputBorder.none,
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+                                        filled: false,
+                                        isDense: true,
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 10,
+                                        ),
+                                      ),
+                                      textInputAction: TextInputAction.search,
+                                      onSubmitted: (_) => _runSearch(),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: _searching ? null : _runSearch,
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: MapUiColors.accent,
+                                      disabledForegroundColor: const Color(
+                                        0xFF94A3B8,
                                       ),
                                     ),
-                                    textInputAction: TextInputAction.search,
-                                    onSubmitted: (_) => _runSearch(),
-                                  ),
-                                ),
-                                TextButton(
-                                  onPressed: _searching ? null : _runSearch,
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: MapUiColors.accent,
-                                    disabledForegroundColor:
-                                        const Color(0xFF94A3B8),
-                                  ),
-                                  child: _searching
-                                      ? const SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: MapUiColors.accent,
+                                    child: _searching
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: MapUiColors.accent,
+                                            ),
+                                          )
+                                        : const Text(
+                                            '검색',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              color: MapUiColors.accent,
+                                            ),
                                           ),
-                                        )
-                                      : const Text(
-                                          '검색',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            color: MapUiColors.accent,
-                                          ),
-                                        ),
-                                ),
-                              ],
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Material(
-                        elevation: 3,
-                        shadowColor: Colors.black38,
-                        surfaceTintColor: Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
-                        color: Colors.white,
-                        clipBehavior: Clip.antiAlias,
-                        child: IconButton(
-                          tooltip: auth.isLoggedIn ? '내정보' : '로그인',
-                          onPressed: () {
-                            if (auth.isLoggedIn) {
-                              context.push('/mypage');
-                            } else {
-                              context.push('/login');
-                            }
-                          },
-                          icon: Icon(
-                            auth.isLoggedIn ? Icons.person : Icons.login,
-                            color: MapUiColors.accent,
+                        const SizedBox(width: 8),
+                        Material(
+                          elevation: 3,
+                          shadowColor: Colors.black38,
+                          surfaceTintColor: Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          color: Colors.white,
+                          clipBehavior: Clip.antiAlias,
+                          child: IconButton(
+                            tooltip: auth.isLoggedIn ? '내정보' : '로그인',
+                            onPressed: () {
+                              if (auth.isLoggedIn) {
+                                context.push('/mypage');
+                              } else {
+                                context.push('/login');
+                              }
+                            },
+                            icon: Icon(
+                              auth.isLoggedIn ? Icons.person : Icons.login,
+                              color: MapUiColors.accent,
+                            ),
                           ),
                         ),
                       ),
@@ -1636,34 +1791,120 @@ class _MapPageState extends State<MapPage>
                         ],
                       ],
                     ),
-                  ),
-                  if (_nearbyMenu) _NearbyFilterRow(map: map),
-                  if (_gridMenu) _GridFilterRow(map: map),
-                  if (_accidentMenu)
-                    _AccidentFilterRow(
-                      map: map,
-                      onToggle: _toggleAccidentZonesUi,
-                    ),
-                  if (map.error != null)
-                    Container(
-                      margin: const EdgeInsets.only(top: 6),
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(8),
+                    const SizedBox(height: 8),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _TopChip(
+                            label: '내 위치',
+                            onTap: _myLocation,
+                            icon: Icons.my_location,
+                          ),
+                          const SizedBox(width: 6),
+                          _TopChip(
+                            label: map.infraVisible
+                                ? (map.visibleInfraTypes.length ==
+                                          kInfraTypes.length
+                                      ? '주변'
+                                      : '주변 · ${map.visibleInfraTypes.length}종')
+                                : '주변 · 숨김',
+                            selected: map.infraVisible,
+                            onTap: () {
+                              setState(() {
+                                _nearbyMenu = !_nearbyMenu;
+                                _gridMenu = false;
+                                _accidentMenu = false;
+                              });
+                            },
+                            onLongPress: () =>
+                                context.read<MapProvider>().toggleInfra(),
+                          ),
+                          const SizedBox(width: 6),
+                          _TopChip(
+                            label: map.gridsVisible
+                                ? (map.visibleGrades.length ==
+                                          kSafetyGrades.length
+                                      ? '격자'
+                                      : '격자 · ${map.visibleGrades.length}종')
+                                : '격자 · 숨김',
+                            selected: map.gridsVisible,
+                            onTap: () {
+                              setState(() {
+                                _gridMenu = !_gridMenu;
+                                _nearbyMenu = false;
+                                _accidentMenu = false;
+                              });
+                            },
+                            onLongPress: () =>
+                                context.read<MapProvider>().toggleGrids(),
+                          ),
+                          const SizedBox(width: 6),
+                          _TopChip(
+                            label: _accidentChipLabel(map),
+                            selected: map.accidentZonesVisible,
+                            onTap: () {
+                              setState(() {
+                                _accidentMenu = !_accidentMenu;
+                                _nearbyMenu = false;
+                                _gridMenu = false;
+                              });
+                            },
+                            onLongPress: _toggleAccidentZonesUi,
+                          ),
+                          const SizedBox(width: 6),
+                          Consumer<NearbyMonitor>(
+                            builder: (context, monitor, _) {
+                              return _TopChip(
+                                label: monitor.enabled ? '주변알림 ON' : '주변알림',
+                                selected: monitor.enabled,
+                                icon: monitor.enabled
+                                    ? Icons.notifications_active
+                                    : Icons.notifications_none,
+                                onTap: monitor.busy
+                                    ? () {}
+                                    : _toggleNearbyMonitor,
+                              );
+                            },
+                          ),
+                          if (map.loading) ...[
+                            const SizedBox(width: 8),
+                            const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ],
+                        ],
                       ),
-                      child: Text(
-                        map.error!,
-                        style: TextStyle(
-                          color: Colors.red.shade800,
-                          fontSize: 12,
+                    ),
+                    if (_nearbyMenu) _NearbyFilterRow(map: map),
+                    if (_gridMenu) _GridFilterRow(map: map),
+                    if (_accidentMenu)
+                      _AccidentFilterRow(
+                        map: map,
+                        onToggle: _toggleAccidentZonesUi,
+                      ),
+                    if (map.error != null)
+                      Container(
+                        margin: const EdgeInsets.only(top: 6),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(8),
                         ),
+                        child: Text(
+                          map.error!,
+                          style: TextStyle(
+                            color: Colors.red.shade800,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ],
-      ),
-            ),
-          ),
 
           // 하단 패널 (핸들 드래그로 높이 조절 · 탭 공통)
           Positioned(
@@ -1701,19 +1942,18 @@ class _MapPageState extends State<MapPage>
                         return;
                       }
                     }
-                  }
-                  final p = tryLatLng(r.lat, r.lng);
-                  if (p != null) {
-                    _focusMapOn(p, zoom: 16);
-                    _loadAround(p, 16);
-                  }
-                },
-                formatRange: _formatRange,
-                onDragUpdate: (d) => _onPanelDragUpdate(d, screenH, map),
-                onDragEnd: (d) => _onPanelDragEnd(d, screenH, map),
+                    final p = tryLatLng(r.lat, r.lng);
+                    if (p != null) {
+                      _focusMapOn(p, zoom: 16);
+                      _loadAround(p, 16);
+                    }
+                  },
+                  formatRange: _formatRange,
+                  onDragUpdate: (d) => _onPanelDragUpdate(d, screenH, map),
+                  onDragEnd: (d) => _onPanelDragEnd(d, screenH, map),
+                ),
               ),
             ),
-          ),
 
           // 주변알림 FAB — 제보 반대편(좌측), 패널과 함께 상승
           AnimatedPositioned(
@@ -1780,92 +2020,97 @@ class _MapPageState extends State<MapPage>
               shadowColor: Colors.black38,
               child: InkWell(
                 borderRadius: BorderRadius.circular(28),
-                onTap: () {
-                  if (!auth.isLoggedIn) {
-                    context.push('/login');
-                    return;
-                  }
-                  context.push('/report/create', extra: _myPos);
-                },
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.add_location_alt,
-                        color: Color(0xFF0F172A),
-                        size: 20,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        '제보',
-                        style: TextStyle(
-                          color: Color(0xFF0F172A),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // 하단 4탭 레일
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Material(
-              elevation: 8,
-              color: Colors.white,
-              shadowColor: Colors.black26,
-              child: SafeArea(
-                top: false,
-                child: DecoratedBox(
-                  decoration: const BoxDecoration(
-                    border: Border(
-                      top: BorderSide(color: Color(0xFFE2E8F0), width: 1),
-                    ),
-                  ),
-        child: SizedBox(
-                    height: 56,
+                color: Colors.white,
+                shadowColor: Colors.black38,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(28),
+                  onTap: () {
+                    if (!auth.isLoggedIn) {
+                      context.push('/login');
+                      return;
+                    }
+                    context.push('/report/create', extra: _myPos);
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     child: Row(
-            children: [
-                        _RailTab(
-                          icon: Icons.grid_on,
-                          label: '격자',
-                          selected: _panelTab == MapPanelTab.grid,
-                          onTap: () => _openPanel(MapPanelTab.grid),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.add_location_alt,
+                          color: Color(0xFF0F172A),
+                          size: 20,
                         ),
-                        _RailTab(
-                          icon: Icons.radio_button_checked,
-                          label: '행사',
-                          selected: _panelTab == MapPanelTab.event,
-                          onTap: () => _openPanel(MapPanelTab.event),
+                        SizedBox(width: 6),
+                        Text(
+                          '제보',
+                          style: TextStyle(
+                            color: Color(0xFF0F172A),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
                         ),
-                        _RailTab(
-                          icon: Icons.priority_high,
-                          label: '제보',
-                          selected: _panelTab == MapPanelTab.report,
-                          onTap: () => _openPanel(MapPanelTab.report),
-                        ),
-                        _RailTab(
-                          icon: Icons.person_outline,
-                          label: '내 제보',
-                          selected: _panelTab == MapPanelTab.myReport,
-                          onTap: () => _openPanel(MapPanelTab.myReport),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
-          ),
-        ),
             ),
-          ),
-        ],
+
+            // 하단 4탭 레일
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Material(
+                elevation: 8,
+                color: Colors.white,
+                shadowColor: Colors.black26,
+                child: SafeArea(
+                  top: false,
+                  child: DecoratedBox(
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        top: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+                      ),
+                    ),
+                    child: SizedBox(
+                      height: 56,
+                      child: Row(
+                        children: [
+                          _RailTab(
+                            icon: Icons.grid_on,
+                            label: '격자',
+                            selected: _panelTab == MapPanelTab.grid,
+                            onTap: () => _openPanel(MapPanelTab.grid),
+                          ),
+                          _RailTab(
+                            icon: Icons.radio_button_checked,
+                            label: '행사',
+                            selected: _panelTab == MapPanelTab.event,
+                            onTap: () => _openPanel(MapPanelTab.event),
+                          ),
+                          _RailTab(
+                            icon: Icons.priority_high,
+                            label: '제보',
+                            selected: _panelTab == MapPanelTab.report,
+                            onTap: () => _openPanel(MapPanelTab.report),
+                          ),
+                          _RailTab(
+                            icon: Icons.person_outline,
+                            label: '내 제보',
+                            selected: _panelTab == MapPanelTab.myReport,
+                            onTap: () => _openPanel(MapPanelTab.myReport),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1960,10 +2205,7 @@ class _TopChip extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (icon != null) ...[
-                    Icon(icon),
-                    const SizedBox(width: 4),
-                  ],
+                  if (icon != null) ...[Icon(icon), const SizedBox(width: 4)],
                   Text(label),
                 ],
               ),
@@ -2138,9 +2380,7 @@ class _AccidentFilterRow extends StatelessWidget {
           runSpacing: 4,
           children: [
             FilterChip(
-              label: Text(
-                map.accidentZonesVisible ? '위험구간 ON' : '위험구간 OFF',
-              ),
+              label: Text(map.accidentZonesVisible ? '위험구간 ON' : '위험구간 OFF'),
               selected: map.accidentZonesVisible,
               onSelected: (_) => onToggle(),
             ),
@@ -2320,11 +2560,11 @@ class _PanelBody extends StatelessWidget {
   final void Function(DragEndDetails) onDragEnd;
 
   String get _title => switch (tab) {
-        MapPanelTab.grid => '격자 정보',
-        MapPanelTab.event => '행사 · 도시정보',
-        MapPanelTab.report => '제보',
-        MapPanelTab.myReport => '내 제보',
-      };
+    MapPanelTab.grid => '격자 정보',
+    MapPanelTab.event => '행사 · 도시정보',
+    MapPanelTab.report => '제보',
+    MapPanelTab.myReport => '내 제보',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -2509,7 +2749,11 @@ class _GridPanel extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: const Color(0xFFE2E8F0)),
             boxShadow: const [
-              BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2)),
+              BoxShadow(
+                color: Colors.black12,
+                blurRadius: 6,
+                offset: Offset(0, 2),
+              ),
             ],
           ),
           child: Column(
@@ -2544,7 +2788,11 @@ class _GridPanel extends StatelessWidget {
               if (d.activeReports.isEmpty)
                 const Row(
                   children: [
-                    Icon(Icons.check_circle_outline, size: 18, color: Color(0xFF94A3B8)),
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 18,
+                      color: Color(0xFF94A3B8),
+                    ),
                     SizedBox(width: 6),
                     Text('없음', style: TextStyle(color: Color(0xFF94A3B8))),
                   ],
@@ -2555,7 +2803,10 @@ class _GridPanel extends StatelessWidget {
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Text(
                       '[${r['type'] ?? '제보'}] ${r['description'] ?? ''}',
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF334155)),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF334155),
+                      ),
                     ),
                   ),
                 ),
@@ -2567,15 +2818,19 @@ class _GridPanel extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 ...d.tags.map((t) {
-                  final max =
-                      d.tags.map((x) => x.count).fold<int>(1, (a, b) => a > b ? a : b);
+                  final max = d.tags
+                      .map((x) => x.count)
+                      .fold<int>(1, (a, b) => a > b ? a : b);
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(
                       children: [
                         SizedBox(
                           width: 64,
-                          child: Text(t.name, style: const TextStyle(fontSize: 12)),
+                          child: Text(
+                            t.name,
+                            style: const TextStyle(fontSize: 12),
+                          ),
                         ),
                         Expanded(
                           child: ClipRRect(

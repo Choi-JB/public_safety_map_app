@@ -89,7 +89,14 @@ class _SafetyMapAppState extends State<SafetyMapApp> {
     routes: [
       GoRoute(path: '/login', builder: (_, __) => const LoginPage()),
       GoRoute(path: '/signup', builder: (_, __) => const SignupPage()),
-      GoRoute(path: '/map', builder: (_, __) => const MapPage()),
+      GoRoute(
+        path: '/map', 
+        builder: (context, state){
+            final extra = state.extra;
+            final focus = extra is MapFocusTarget ? extra : null;
+            return MapPage(focus: focus);
+          },
+        ),
       GoRoute(path: '/mypage', builder: (_, __) => const MyPage()),
       GoRoute(
         path: '/report/create',
