@@ -82,8 +82,6 @@ class _MapPageState extends State<MapPage>
   final ValueNotifier<_MyLocPaint> _myLocPaint =
       ValueNotifier(const _MyLocPaint());
   StreamSubscription<Position>? _posSub;
-  /// 정지 중에도 새 제보 감지 (위치 필터만으로는 부족)
-  Timer? _nearbyAlertTimer;
   /// 알림 탭 → 해당 제보 열기
   StreamSubscription<int>? _openReportSub;
   StreamSubscription<AccidentZoneItem>? _openAccidentSub;
@@ -258,7 +256,6 @@ class _MapPageState extends State<MapPage>
     if (p == null || !mounted) return;
     final nextHeading = _resolveHeadingRad(pos, p);
     _animateMyLocationTo(p, headingRad: nextHeading);
-    _scheduleNearbyReportCheck(p);
   }
 
   /// 사용자 맵 제스처 → 따라가기 OFF + idle (1-A)
@@ -571,7 +568,6 @@ class _MapPageState extends State<MapPage>
     WidgetsBinding.instance.removeObserver(this);
     _viewportDebounce?.cancel();
     _idleFollowTimer?.cancel();
-    _nearbyAlertTimer?.cancel();
     _openReportSub?.cancel();
     _openAccidentSub?.cancel();
     _posSub?.cancel();
@@ -582,24 +578,9 @@ class _MapPageState extends State<MapPage>
     super.dispose();
   }
 
-  void _scheduleNearbyReportCheck(LatLng me, {bool force = false}) {
-    if (!mounted) return;
-    // 감시 ON이면 NearbyMonitor 가 전담 (중복 FGS·검사 방지)
-    if (context.read<NearbyMonitor>().enabled) return;
-    unawaited(
-      context.read<NearbyReportAlert>().checkNear(me, force: force),
-    );
-  }
-
-  /// 위험구간 ON/OFF + (ON 시) GPS 기준 즉시 알림 검사
+  /// 위험구간 ON/OFF. 알림 검사는 NearbyMonitor(ON) 경로만 사용.
   void _toggleAccidentZonesUi() {
     context.read<MapProvider>().toggleAccidentZones();
-    final me = _myPos;
-    if (me != null) {
-      unawaited(
-        context.read<NearbyReportAlert>().checkNear(me, force: true),
-      );
-    }
   }
 
   Future<void> _toggleNearbyMonitor() async {
@@ -738,7 +719,6 @@ class _MapPageState extends State<MapPage>
               headingRad: _resolveHeadingRad(pos, p),
             );
           }
-          _scheduleNearbyReportCheck(p, force: true);
         }
       } catch (_) {
         // 타임아웃·실패 시 기본 중심 유지
@@ -848,18 +828,6 @@ class _MapPageState extends State<MapPage>
       _applyGpsFix,
       onError: (_) {},
     );
-
-    // 서 있을 때도 주기적으로 새 제보 검사
-    _nearbyAlertTimer?.cancel();
-    _nearbyAlertTimer = Timer.periodic(const Duration(seconds: 45), (_) {
-      final p = _myPos;
-      if (p == null || !mounted) return;
-      _scheduleNearbyReportCheck(p, force: true);
-    });
-
-    if (_myPos != null) {
-      _scheduleNearbyReportCheck(_myPos!, force: true);
-    }
   }
 
   Future<void> _myLocation() async {
