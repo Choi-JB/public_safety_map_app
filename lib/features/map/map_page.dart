@@ -900,8 +900,9 @@ class _MapPageState extends State<MapPage> {
         final shouldExit = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('앱 종료'),
-            content: const Text('앱을 종료할까요?'),
+            title: const Text('앱 종료', textAlign: TextAlign.center,),
+            content: const Text('앱을 종료할까요?', textAlign: TextAlign.center,),
+            actionsAlignment: MainAxisAlignment.center,
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
