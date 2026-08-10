@@ -293,6 +293,14 @@ class MyPageSummary {
       );
 }
 
+/// 맵에 위치 전달용 클래스
+class MapFocusTarget {
+  const MapFocusTarget({this.lat, this.lng, this.reportId});
+  final double? lat;
+  final double? lng;
+  final int? reportId;
+}
+
 class MyReport {
   const MyReport({
     required this.id,
