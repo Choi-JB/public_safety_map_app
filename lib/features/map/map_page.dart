@@ -128,7 +128,7 @@ class _MapPageState extends State<MapPage> {
       await _openAccidentZone(pendingAcc);
     }
 
-    /// 맵 포커스 전달 받은 경우 (마이페이지 → 제보 위치)
+    /// 맵 포커스 전달 받은 경우 (마이페이지 → 제보/피드백 위치)
     final focus = widget.focus;
     if (focus != null) {
       final p = tryLatLng(focus.lat, focus.lng);
@@ -148,6 +148,20 @@ class _MapPageState extends State<MapPage> {
           }
         }
       }
+
+      //피드백 -> 격자
+      final gridId = focus.gridId;
+      if (gridId != null && mounted) {
+        await _onGridTap(gridId);
+        if(!mounted) return;
+        final detail = context.read<MapProvider>().selectedGridDetail;
+        final gp = tryLatLng(detail?.lat, detail?.lng);
+        if(gp != null) {
+          _focusMapOn(gp, zoom: 16);
+          await _loadAround(gp, 16);
+        }
+      }
+      
     }
   }
 
