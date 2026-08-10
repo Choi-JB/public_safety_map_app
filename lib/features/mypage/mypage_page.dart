@@ -192,8 +192,9 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
               final ok = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('로그아웃'),
-                  content: const Text('로그아웃 하시겠습니까?'),
+                  title: const Text('로그아웃', textAlign: TextAlign.center,),
+                  content: const Text('로그아웃 하시겠습니까?', textAlign: TextAlign.center,),
+                  actionsAlignment: MainAxisAlignment.center,
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, false),
@@ -201,7 +202,7 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
                     ),
                     FilledButton(
                       onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('로그아웃'),
+                      child: const Text('로그아웃', textAlign: TextAlign.center,),
                     ),
                   ],
                 ),
@@ -782,7 +783,9 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
               children: f.tags
                   .map(
                     (t) => Chip(
-                      label: Text(t, style: const TextStyle(fontSize: 12)),
+                      label: Text(t, style: const TextStyle(fontSize: 12, color: Color(0xFF0F172A))),
+                      backgroundColor: Colors.white,
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
                       visualDensity: VisualDensity.compact,
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
