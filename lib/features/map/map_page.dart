@@ -42,7 +42,10 @@ String _accidentChipLabel(MapProvider map) {
 }
 
 class MapPage extends StatefulWidget {
-  const MapPage({super.key});
+  const MapPage({super.key, this.focus});
+
+  /// 마이페이지 등에서 전달 (제보/격자 위치)
+  final MapFocusTarget? focus;
 
   @override
   State<MapPage> createState() => _MapPageState();
@@ -464,6 +467,39 @@ class _MapPageState extends State<MapPage>
     final pendingAcc = alert.takePendingOpenAccident();
     if (pendingAcc != null) {
       await _openAccidentZone(pendingAcc);
+    }
+
+    // 마이페이지 → 제보/피드백 위치
+    final focus = widget.focus;
+    if (focus != null) {
+      final p = tryLatLng(focus.lat, focus.lng);
+      if (p != null) {
+        _focusMapOn(p, zoom: 16);
+        await _loadAround(p, 16);
+      }
+
+      final reportId = focus.reportId;
+      if (reportId != null && mounted) {
+        final map = context.read<MapProvider>();
+        for (final item in map.reports) {
+          if (item.id == reportId) {
+            _selectReport(item, moveMap: true);
+            break;
+          }
+        }
+      }
+
+      final gridId = focus.gridId;
+      if (gridId != null && mounted) {
+        await _onGridTap(gridId);
+        if (!mounted) return;
+        final detail = context.read<MapProvider>().selectedGridDetail;
+        final gp = tryLatLng(detail?.lat, detail?.lng);
+        if (gp != null) {
+          _focusMapOn(gp, zoom: 16);
+          await _loadAround(gp, 16);
+        }
+      }
     }
   }
 
