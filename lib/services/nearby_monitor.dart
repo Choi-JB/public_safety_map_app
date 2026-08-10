@@ -68,6 +68,9 @@ class NearbyMonitor extends ChangeNotifier {
       await _posSub?.cancel();
       _timer?.cancel();
 
+      // checkNear 허용 (즉시 1회·스트림보다 먼저)
+      await _alert.setAlertsMasterEnabled(true);
+
       // 즉시 1회
       try {
         final pos = await Geolocator.getCurrentPosition(
@@ -110,6 +113,7 @@ class NearbyMonitor extends ChangeNotifier {
       return null;
     } catch (e) {
       await _teardownStreams();
+      await _alert.setAlertsMasterEnabled(false);
       _enabled = false;
       return '주변 감시 시작에 실패했습니다';
     } finally {
@@ -123,6 +127,7 @@ class NearbyMonitor extends ChangeNotifier {
     notifyListeners();
     try {
       await _teardownStreams();
+      await _alert.setAlertsMasterEnabled(false);
       _enabled = false;
       if (persist) {
         final prefs = await SharedPreferences.getInstance();
