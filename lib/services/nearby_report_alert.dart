@@ -47,6 +47,9 @@ class NearbyReportAlert {
   /// 위험구간 칩 ON 일 때만 다발 알림 검사
   bool accidentAlertsEnabled = false;
 
+  /// 주변알림 마스터. false면 앱 전·후경 모두 checkNear 스킵
+  bool alertsMasterEnabled = false;
+
   final Set<int> _trayIds = {};
   final Set<int> _notifiedIds = {};
   Set<int> _lastSummaryIds = {};
@@ -139,6 +142,34 @@ class NearbyReportAlert {
         await _plugin.cancel(id: accidentSummaryId);
         _lastAccidentSummaryIds = {};
       }
+    }
+  }
+
+  /// 주변알림(NearbyMonitor) ON/OFF. OFF 시 상태바 제보·다발 알림 정리.
+  Future<void> setAlertsMasterEnabled(bool enabled) async {
+    alertsMasterEnabled = enabled;
+    if (!enabled) {
+      await clearAllTrayNotifications();
+    }
+  }
+
+  Future<void> clearAllTrayNotifications() async {
+    for (final id in _trayIds.toList()) {
+      await _plugin.cancel(id: _childNotificationId(id));
+    }
+    _trayIds.clear();
+    if (_lastSummaryIds.isNotEmpty) {
+      await _plugin.cancel(id: summaryNotificationId);
+      _lastSummaryIds = {};
+    }
+
+    for (final id in _accidentTrayIds.toList()) {
+      await _plugin.cancel(id: _accidentNotifId(id));
+    }
+    _accidentTrayIds.clear();
+    if (_lastAccidentSummaryIds.isNotEmpty) {
+      await _plugin.cancel(id: accidentSummaryId);
+      _lastAccidentSummaryIds = {};
     }
   }
 
@@ -241,6 +272,7 @@ class NearbyReportAlert {
       30000 + (id.hashCode.abs() % 100000);
 
   Future<void> checkNear(LatLng me, {bool force = false}) async {
+    if (!alertsMasterEnabled) return;
     if (!_ready) return;
     if (!isValidLatLng(me.latitude, me.longitude)) return;
 
