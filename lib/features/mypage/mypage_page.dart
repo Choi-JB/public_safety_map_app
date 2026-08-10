@@ -187,10 +187,30 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
             tooltip: '비밀번호 변경',
           ),
           IconButton(
+            tooltip: '로그아웃',
             onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('로그아웃'),
+                  content: const Text('로그아웃 하시겠습니까?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('취소'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('로그아웃'),
+                    ),
+                  ],
+                ),
+              );
+              if (ok != true || !context.mounted) return;
+
               await auth.logout();
               if (!context.mounted) return;
-              context.go('/login');
+              context.go('/map');
             },
             icon: const Icon(Icons.logout),
           ),
@@ -508,6 +528,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
               MediaCoverImage(url: _currentImgUrl, expanded: true),
             ],
           ],
+
           /// 제보 위치로 이동 버튼
           if (!_editing && !_busy) ...[
             OutlinedButton.icon(
@@ -823,6 +844,27 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
               MediaCoverImage(url: _currentImgUrl, expanded: true),
             ],
           ],
+
+          /// 피드백 위치로 이동 버튼
+          if (!_editing && !_busy) ...[
+            OutlinedButton.icon(
+              onPressed: () {
+                final gridId = _toIntId(f.gridId);
+                if (gridId == null) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('격자 정보가 없습니다')));
+                  return;
+                }
+                Navigator.pop(context);
+                context.push('/map', extra: MapFocusTarget(gridId: gridId));
+              },
+              icon: const Icon(Icons.map_outlined, size: 18),
+              label: const Text('피드백 위치로 이동'),
+            ),
+            const SizedBox(height: 12),
+          ],
+
           const SizedBox(height: 20),
           if (_busy)
             const Center(

@@ -295,10 +295,11 @@ class MyPageSummary {
 
 /// 맵에 위치 전달용 클래스
 class MapFocusTarget {
-  const MapFocusTarget({this.lat, this.lng, this.reportId});
+  const MapFocusTarget({this.lat, this.lng, this.reportId, this.gridId});
   final double? lat;
   final double? lng;
   final int? reportId;
+  final int? gridId;
 }
 
 class MyReport {
