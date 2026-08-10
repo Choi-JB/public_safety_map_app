@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -47,7 +50,8 @@ class MapPage extends StatefulWidget {
   State<MapPage> createState() => _MapPageState();
 }
 
-class _MapPageState extends State<MapPage> {
+class _MapPageState extends State<MapPage>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   MapController _mapController = MapController();
   final _searchCtrl = TextEditingController();
   bool _booted = false;
@@ -64,8 +68,21 @@ class _MapPageState extends State<MapPage> {
   Timer? _viewportDebounce;
   static const _viewportDebounceMs = 700;
 
-  /// 실시간 내 위치 마커
+  /// 논리적 최신 GPS (제보·알림·로드 기준)
   LatLng? _myPos;
+  /// 마커용 보간 위치
+  LatLng? _displayPos;
+  /// 표시용 heading (라디안, 북쪽 0 · 시계방향)
+  double _headingRad = 0;
+  late final AnimationController _gpsAnim;
+  LatLng? _gpsAnimFrom;
+  LatLng? _gpsAnimTo;
+  double _headingAnimFrom = 0;
+  double _headingAnimTo = 0;
+  static const _gpsAnimDuration = Duration(milliseconds: 320);
+  /// 내 위치 마커 전용 리페인트 (MapPage setState 없이)
+  final ValueNotifier<_MyLocPaint> _myLocPaint =
+      ValueNotifier(const _MyLocPaint());
   StreamSubscription<Position>? _posSub;
 
   /// 정지 중에도 새 제보 감지 (위치 필터만으로는 부족)
@@ -74,6 +91,19 @@ class _MapPageState extends State<MapPage> {
   /// 알림 탭 → 해당 제보 열기
   StreamSubscription<int>? _openReportSub;
   StreamSubscription<AccidentZoneItem>? _openAccidentSub;
+
+  /// 보간 위치를 카메라가 따라감 (북-up). 사용자 제스처 시 off → idle 후 재개.
+  bool _followMe = true;
+  Timer? _idleFollowTimer;
+  // 정지 후 15초 뒤에 follow 중지
+  static const _idleFollowDuration = Duration(seconds: 15);
+  /// follow 중 MapProvider.setCenter 스로틀 (매 프레임 notify 방지)
+  DateTime? _lastFollowProviderSync;
+  static const _followProviderSyncInterval = Duration(seconds: 1);
+  /// 프로그램 이동으로 인한 map 이벤트를 사용자 제스처로 오인 방지
+  bool _programmaticCamera = false;
+  GoRouter? _router;
+  VoidCallback? _routeListener;
 
   MapPanelTab _panelTab = MapPanelTab.grid;
 
@@ -100,7 +130,324 @@ class _MapPageState extends State<MapPage> {
   @override
   void initState() {
     super.initState();
+    _gpsAnim = AnimationController(
+      vsync: this,
+      duration: _gpsAnimDuration,
+    )..addListener(_onGpsAnimTick);
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _boot());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final router = GoRouter.maybeOf(context);
+    if (router != null && !identical(router, _router)) {
+      if (_router != null && _routeListener != null) {
+        _router!.routerDelegate.removeListener(_routeListener!);
+      }
+      _router = router;
+      _routeListener = _onRouteChanged;
+      router.routerDelegate.addListener(_routeListener!);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _onMapScreenVisibilityMaybeResumed();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _idleFollowTimer?.cancel();
+    }
+  }
+
+  void _onRouteChanged() {
+    if (!mounted) return;
+    if (_isMapRouteActive) {
+      _onMapScreenVisibilityMaybeResumed();
+    } else {
+      // 다른 화면: idle 정지 (6-A)
+      _idleFollowTimer?.cancel();
+    }
+  }
+
+  void _onMapScreenVisibilityMaybeResumed() {
+    if (!mounted || !_isMapRouteActive) return;
+    if (_followMe) {
+      _syncFollowCamera();
+    } else {
+      _armIdleFollowTimer();
+    }
+  }
+
+  /// /map 이고 스택 최상단일 때만 active
+  bool get _isMapRouteActive {
+    try {
+      final path = GoRouter.of(context).state.uri.path;
+      if (path != '/map') return false;
+    } catch (_) {}
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    return true;
+  }
+
+  void _publishMyLocPaint() {
+    final p = _displayPos ?? _myPos;
+    _myLocPaint.value = _MyLocPaint(pos: p, headingRad: _headingRad);
+  }
+
+  void _onGpsAnimTick() {
+    final from = _gpsAnimFrom;
+    final to = _gpsAnimTo;
+    if (from == null || to == null) return;
+    final t = Curves.easeOut.transform(_gpsAnim.value);
+    _displayPos = LatLng(
+      from.latitude + (to.latitude - from.latitude) * t,
+      from.longitude + (to.longitude - from.longitude) * t,
+    );
+    _headingRad = _lerpHeadingRad(_headingAnimFrom, _headingAnimTo, t);
+    _publishMyLocPaint();
+    if (_followMe) _syncFollowCamera();
+  }
+
+  /// 최초 위치·강제 스냅 (보간 없이 즉시).
+  void _snapMyLocation(LatLng p, {double? headingRad}) {
+    _gpsAnim.stop();
+    _gpsAnimFrom = null;
+    _gpsAnimTo = null;
+    _myPos = p;
+    _displayPos = p;
+    if (headingRad != null) _headingRad = headingRad;
+    _publishMyLocPaint();
+    if (_followMe) _syncFollowCamera();
+  }
+
+  /// GPS 목표로 표시 위치를 미끄러지듯 이동 (easeOut 보간).
+  void _animateMyLocationTo(LatLng p, {double? headingRad}) {
+    _myPos = p;
+    final headingTo = headingRad ?? _headingRad;
+
+    // 첫 좌표는 바로 찍기
+    if (_displayPos == null) {
+      _displayPos = p;
+      _headingRad = headingTo;
+      _publishMyLocPaint();
+      if (_followMe) _syncFollowCamera();
+      return;
+    }
+
+    _gpsAnimFrom = _displayPos;
+    _gpsAnimTo = p;
+    _headingAnimFrom = _headingRad;
+    _headingAnimTo = headingTo;
+    _gpsAnim
+      ..stop()
+      ..forward(from: 0);
+  }
+
+  double _lerpHeadingRad(double from, double to, double t) {
+    var d = to - from;
+    while (d > math.pi) {
+      d -= 2 * math.pi;
+    }
+    while (d < -math.pi) {
+      d += 2 * math.pi;
+    }
+    return from + d * t;
+  }
+
+  /// GPS 스트림 fix → 논리 즉시 + 표시 보간.
+  void _applyGpsFix(Position pos) {
+    final p = tryLatLng(pos.latitude, pos.longitude);
+    if (p == null || !mounted) return;
+    final nextHeading = _resolveHeadingRad(pos, p);
+    _animateMyLocationTo(p, headingRad: nextHeading);
+    _scheduleNearbyReportCheck(p);
+  }
+
+  /// 사용자 맵 제스처 → 따라가기 OFF + idle (1-A)
+  void _onMapUserGesture() {
+    if (!_followMe) {
+      _onUserActivity();
+      return;
+    }
+    if (mounted) {
+      setState(() => _followMe = false);
+    } else {
+      _followMe = false;
+    }
+    _armIdleFollowTimer();
+  }
+
+  /// 맵 외 UI 조작: 따라가기는 유지, idle만 리셋 (follow off일 때 20초 연장) (4-C)
+  void _onUserActivity() {
+    if (_followMe) return;
+    _armIdleFollowTimer();
+  }
+
+  void _armIdleFollowTimer() {
+    _idleFollowTimer?.cancel();
+    if (!mounted || _followMe || !_isMapRouteActive) return;
+    _idleFollowTimer = Timer(_idleFollowDuration, _onIdleFollowTimeout);
+  }
+
+  void _onIdleFollowTimeout() {
+    if (!mounted || _followMe) return;
+    if (!_isMapRouteActive) {
+      // 화면 복귀 시 다시 arm
+      return;
+    }
+    setState(() => _followMe = true);
+    _idleFollowTimer?.cancel();
+    final p = _displayPos ?? _myPos;
+    if (p != null) {
+      double z = 15;
+      try {
+        z = safeZoom(_mapController.camera.zoom);
+      } catch (_) {}
+      _safeMapMove(p, z);
+    } else {
+      _syncFollowCamera();
+    }
+  }
+
+  void _enableFollowAndCenter({double? zoom}) {
+    _idleFollowTimer?.cancel();
+    if (mounted) {
+      setState(() => _followMe = true);
+    } else {
+      _followMe = true;
+    }
+    final p = _displayPos ?? _myPos;
+    if (p == null) return;
+    double z = zoom ?? 15;
+    try {
+      if (zoom == null) z = safeZoom(_mapController.camera.zoom);
+    } catch (_) {
+      z = zoom ?? 15;
+    }
+    _safeMapMove(p, z);
+  }
+
+  void _syncFollowCamera() {
+    if (!_followMe || !mounted || !_isMapRouteActive) return;
+    final raw = _displayPos ?? _myPos;
+    if (raw == null) return;
+    final p = tryLatLng(raw.latitude, raw.longitude);
+    if (p == null) return;
+    double z = 15;
+    try {
+      z = safeZoom(_mapController.camera.zoom);
+    } catch (_) {}
+    if (!_mapLayoutReady()) return;
+    if (!_cameraHealthy()) return;
+    _programmaticCamera = true;
+    try {
+      // 카메라는 매 프레임 추적 (가벼운 move)
+      _mapController.move(p, z);
+      if (!mounted) return;
+      final mp = context.read<MapProvider>();
+      // setZoom 은 notify 없음 → 매 프레임 가능
+      mp.setZoom(z);
+      // setCenter 는 notifyListeners → 1초에 한 번만 (전체 rebuild 억제)
+      final now = DateTime.now();
+      final last = _lastFollowProviderSync;
+      if (last == null ||
+          now.difference(last) >= _followProviderSyncInterval) {
+        _lastFollowProviderSync = now;
+        mp.setCenter(p);
+      }
+    } catch (_) {
+      // ignore — remount 경로에 맡김
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _programmaticCamera = false;
+    });
+  }
+
+  static bool _isUserMapGestureSource(MapEventSource source) {
+    switch (source) {
+      case MapEventSource.dragStart:
+      case MapEventSource.onDrag:
+      case MapEventSource.dragEnd:
+      case MapEventSource.multiFingerGestureStart:
+      case MapEventSource.onMultiFinger:
+      case MapEventSource.multiFingerEnd:
+      case MapEventSource.scrollWheel:
+      case MapEventSource.doubleTap:
+      case MapEventSource.doubleTapHold:
+      case MapEventSource.doubleTapZoomAnimationController:
+      case MapEventSource.flingAnimationController:
+      case MapEventSource.cursorKeyboardRotation:
+      case MapEventSource.keyboard:
+        return true;
+      case MapEventSource.mapController:
+      case MapEventSource.tap:
+      case MapEventSource.secondaryTap:
+      case MapEventSource.longPress:
+      case MapEventSource.interactiveFlagsChanged:
+      case MapEventSource.fitCamera:
+      case MapEventSource.custom:
+      case MapEventSource.nonRotatedSizeChange:
+        return false;
+    }
+  }
+
+  double _resolveHeadingRad(Position pos, LatLng p) {
+    final speed = pos.speed; // m/s
+    final h = pos.heading;
+    if (h.isFinite && h >= 0 && h <= 360) {
+      final acc = pos.headingAccuracy;
+      // < 0 또는 non-finite = 미제공으로 간주하고 허용
+      final accOk = !acc.isFinite || acc < 0 || acc <= 50;
+      if (accOk && speed.isFinite && speed >= 0.4) {
+        return h * math.pi / 180;
+      }
+    }
+    // 이동 벡터로 추정
+    final from = _displayPos ?? _myPos;
+    if (from != null) {
+      final meters = Geolocator.distanceBetween(
+        from.latitude,
+        from.longitude,
+        p.latitude,
+        p.longitude,
+      );
+      if (meters >= 1.2) {
+        final bearing = Geolocator.bearingBetween(
+          from.latitude,
+          from.longitude,
+          p.latitude,
+          p.longitude,
+        );
+        return bearing * math.pi / 180;
+      }
+    }
+    return _headingRad;
+  }
+
+  LocationSettings _mapGpsSettings() {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        intervalDuration: const Duration(milliseconds: 300),
+      );
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      return AppleSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        activityType: ActivityType.otherNavigation,
+        pauseLocationUpdatesAutomatically: false,
+      );
+    }
+    return const LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 0,
+    );
   }
 
   Future<void> _boot() async {
@@ -168,6 +515,7 @@ class _MapPageState extends State<MapPage> {
   /// 알림에서 선택한 제보를 지도에서 열고 선택 상태 표시
   Future<void> _openReportById(int reportId) async {
     if (!mounted) return;
+    _onMapUserGesture();
 
     final alert = context.read<NearbyReportAlert>();
     final map = context.read<MapProvider>();
@@ -205,6 +553,7 @@ class _MapPageState extends State<MapPage> {
   /// 위험구간 알림 탭 → 지도 이동 + 위험구간 표시
   Future<void> _openAccidentZone(AccidentZoneItem z) async {
     if (!mounted) return;
+    _onMapUserGesture();
     final map = context.read<MapProvider>();
     if (!map.accidentZonesVisible) {
       map.toggleAccidentZones();
@@ -225,11 +574,18 @@ class _MapPageState extends State<MapPage> {
 
   @override
   void dispose() {
+    if (_router != null && _routeListener != null) {
+      _router!.routerDelegate.removeListener(_routeListener!);
+    }
+    WidgetsBinding.instance.removeObserver(this);
     _viewportDebounce?.cancel();
+    _idleFollowTimer?.cancel();
     _nearbyAlertTimer?.cancel();
     _openReportSub?.cancel();
     _openAccidentSub?.cancel();
     _posSub?.cancel();
+    _gpsAnim.dispose();
+    _myLocPaint.dispose();
     _searchCtrl.dispose();
     _mapController.dispose();
     super.dispose();
@@ -376,7 +732,12 @@ class _MapPageState extends State<MapPage> {
         if (p != null) {
           c = p;
           z = 15;
-          if (mounted) setState(() => _myPos = p);
+          if (mounted) {
+            _snapMyLocation(
+              p,
+              headingRad: _resolveHeadingRad(pos, p),
+            );
+          }
           _scheduleNearbyReportCheck(p, force: true);
         }
       } catch (_) {
@@ -460,10 +821,8 @@ class _MapPageState extends State<MapPage> {
     return true;
   }
 
-  /// GPS 스트림 — 마커를 위치에 따라 갱신 (지도 자동 추적은 버튼 탭 시만)
-  Future<void> _tryStartLocationTracking({
-    required bool requestPermission,
-  }) async {
+  /// GPS 스트림 — 마커를 위치에 따라 갱신
+  Future<void> _tryStartLocationTracking({required bool requestPermission}) async {
     final ok = await _ensureLocationPermission(request: requestPermission);
     if (!ok || !mounted) return;
     if (_posSub != null) return;
@@ -478,22 +837,17 @@ class _MapPageState extends State<MapPage> {
           ),
         );
         final p = tryLatLng(pos.latitude, pos.longitude);
-        if (p != null && mounted) setState(() => _myPos = p);
+        if (p != null && mounted) {
+          _snapMyLocation(p, headingRad: _resolveHeadingRad(pos, p));
+        }
       } catch (_) {}
     }
 
-    const settings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 5, // 5m 이상 이동 시 갱신
+    final settings = _mapGpsSettings();
+    _posSub = Geolocator.getPositionStream(locationSettings: settings).listen(
+      _applyGpsFix,
+      onError: (_) {},
     );
-    _posSub = Geolocator.getPositionStream(locationSettings: settings).listen((
-      pos,
-    ) {
-      final p = tryLatLng(pos.latitude, pos.longitude);
-      if (p == null || !mounted) return;
-      setState(() => _myPos = p);
-      _scheduleNearbyReportCheck(p);
-    }, onError: (_) {});
 
     // 서 있을 때도 주기적으로 새 제보 검사
     _nearbyAlertTimer?.cancel();
@@ -511,20 +865,22 @@ class _MapPageState extends State<MapPage> {
   Future<void> _myLocation() async {
     await _tryStartLocationTracking(requestPermission: true);
     if (!mounted) return;
-    final latLng = _myPos;
+    final latLng = _displayPos ?? _myPos;
     if (latLng == null) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('위치를 가져오지 못했습니다')));
       return;
     }
-    _safeMapMove(latLng, 15);
+    // 5-B: 1회 센터 + 따라가기 ON
+    _enableFollowAndCenter(zoom: 15);
     await _loadAround(latLng, 15);
   }
 
   Future<void> _runSearch() async {
     final q = _searchCtrl.text.trim();
     if (q.isEmpty) return;
+    _onMapUserGesture(); // 검색 이동 = 탐색 (follow off)
     setState(() => _searching = true);
     final mp = context.read<MapProvider>();
     final point = await mp.searchPlace(q);
@@ -669,6 +1025,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _openPanel(MapPanelTab tab) {
+    _onUserActivity();
     final same = _panelTab == tab;
     final wasOpen = _panelExpanded;
     setState(() => _panelTab = tab);
@@ -685,6 +1042,7 @@ class _MapPageState extends State<MapPage> {
     double screenH,
     MapProvider map,
   ) {
+    _onUserActivity();
     final open = _defaultOpenHeight(screenH, map);
     final cur = _panelHeightPx ?? (_panelExpanded ? open : _collapsedBarH);
     // 위로 드래그(dy < 0) → 확대. 높이는 접힘~기본 펼침 사이만
@@ -696,6 +1054,7 @@ class _MapPageState extends State<MapPage> {
     double screenH,
     MapProvider map,
   ) {
+    _onUserActivity();
     final open = _defaultOpenHeight(screenH, map);
     final cur = _panelHeightPx ?? _collapsedBarH;
     final v = details.primaryVelocity ?? 0;
@@ -718,6 +1077,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _onGridTap(int gridId) async {
+    _onUserActivity();
     setState(() {
       _panelTab = MapPanelTab.grid;
       _selectedReportId = null;
@@ -729,6 +1089,11 @@ class _MapPageState extends State<MapPage> {
 
   /// 마커 탭·패널 제보 카드 공통 선택 (지도 이동 + 사진 말풍선 + 패널 상세)
   void _selectReport(ReportItem r, {bool moveMap = true}) {
+    if (moveMap) {
+      _onMapUserGesture();
+    } else {
+      _onUserActivity();
+    }
     setState(() {
       _selectedReportId = r.id;
       _selectedEventId = null;
@@ -742,6 +1107,11 @@ class _MapPageState extends State<MapPage> {
 
   /// 마커 탭·패널 행사 카드 공통 선택
   void _selectEvent(CityEventItem e, {bool moveMap = true}) {
+    if (moveMap) {
+      _onMapUserGesture();
+    } else {
+      _onUserActivity();
+    }
     setState(() {
       _selectedEventId = e.id;
       _selectedReportId = null;
@@ -831,8 +1201,8 @@ class _MapPageState extends State<MapPage> {
 
   void _applyMapMove(LatLng p, double z, Offset off) {
     // offset move는 레이아웃·카메라가 건강할 때만
-    final useOffset =
-        off != Offset.zero && _mapLayoutReady() && _cameraHealthy();
+    final useOffset = off != Offset.zero && _mapLayoutReady() && _cameraHealthy();
+    _programmaticCamera = true;
     try {
       if (useOffset) {
         _mapController.move(p, z, offset: off);
@@ -861,6 +1231,10 @@ class _MapPageState extends State<MapPage> {
       } catch (_) {
         _remountMap(preferCenter: p, preferZoom: z);
       }
+    } finally {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _programmaticCamera = false;
+      });
     }
   }
 
@@ -891,22 +1265,90 @@ class _MapPageState extends State<MapPage> {
     final railH = 56.0 + bottomPad;
     final panelH = _resolvePanelHeight(screenH, map);
 
-    final allowPop = context.canPop();
+    return Scaffold(
+      backgroundColor: const Color(0xFFF1F5F9),
+      body: Stack(
+        children: [
+          // 맵
+          Positioned.fill(
+            child: FlutterMap(
+              key: ValueKey<int>(_mapGeneration),
+            mapController: _mapController,
+            options: MapOptions(
+                initialCenter: coerceLatLng(
+                  map.center.latitude,
+                  map.center.longitude,
+                ),
+                initialZoom: safeZoom(map.zoom),
+                minZoom: kMapMinZoom,
+                maxZoom: kMapMaxZoom,
+                interactionOptions: const InteractionOptions(
+                  // 두 손가락 회전 시 타일·폴리곤 부하 증가 → 비활성
+                  flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                ),
+              onMapEvent: (e) {
+                  // 카메라 붕괴 조기 감지 → remount (TileLayer NaN 예방)
+                  _ensureCameraHealthyOrRemount(e.camera);
 
-    return PopScope(
-      canPop: allowPop,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (didPop) return;
-        final shouldExit = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('앱 종료', textAlign: TextAlign.center,),
-            content: const Text('앱을 종료할까요?', textAlign: TextAlign.center,),
-            actionsAlignment: MainAxisAlignment.center,
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('취소'),
+                if (!_programmaticCamera &&
+                    e.source != MapEventSource.mapController &&
+                    _isUserMapGestureSource(e.source)) {
+                  _onMapUserGesture();
+                }
+
+                if (e is MapEventMoveEnd) {
+                  final cam = e.camera;
+                    if (!_cameraHealthy()) return;
+                    final c = tryLatLng(
+                      cam.center.latitude,
+                      cam.center.longitude,
+                    );
+                    final z = safeZoom(cam.zoom);
+                    if (c == null) return;
+                    context.read<MapProvider>().setZoom(z);
+                    // follow 중 자동 카메라는 setCenter 스킵
+                    // (_syncFollowCamera 1초 throttle 과 정합; 전체 rebuild 억제)
+                    final programmaticFollow = _followMe &&
+                        (_programmaticCamera ||
+                            e.source == MapEventSource.mapController);
+                    if (!programmaticFollow) {
+                      context.read<MapProvider>().setCenter(c);
+                    }
+                    // follow 중 자동 이동은 뷰포트 로드 과다 → 사용자 이동 끝만 조회
+                    if (!_followMe ||
+                        (!_programmaticCamera &&
+                            e.source != MapEventSource.mapController)) {
+                      _scheduleLoadAround(c, z);
+                    }
+                }
+              },
+              onTap: (_, latLng) {
+                  if (!isValidLatLng(latLng.latitude, latLng.longitude)) {
+                    return;
+                  }
+                  _onUserActivity();
+                  _clearFeatureSelection();
+                final mp = context.read<MapProvider>();
+                GridItem? hit;
+                var best = double.infinity;
+                  for (final g in mp.displayGrids) {
+                    if (!isValidLatLng(g.lat, g.lng)) continue;
+                  final d = (g.lat! - latLng.latitude).abs() +
+                      (g.lng! - latLng.longitude).abs();
+                  if (d < best) {
+                    best = d;
+                    hit = g;
+                  }
+                }
+                  if (hit != null && best.isFinite && best < Env.gridCellDeg) {
+                    _onGridTap(hit.gridId);
+                  }
+              },
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.publicsafetymap.app',
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
@@ -1107,46 +1549,86 @@ class _MapPageState extends State<MapPage> {
                       // 내 위치 (실시간)
                       if (_myPos != null)
                         Marker(
-                          point: _myPos!,
-                          width: 28,
-                          height: 28,
+                          point: point,
+                          width: p.isCluster ? 40 : 26,
+                          height: p.isCluster ? 40 : 26,
                           alignment: Alignment.center,
-                          child: const _MyLocationDot(),
+                          child: p.isCluster
+                              ? GestureDetector(
+                                  onTap: () {
+                                    // 한 단계 확대 → 셀이 쪼개지며 상세 확인
+                                    _onMapUserGesture();
+                                    final z = safeZoom(map.zoom + 1.2);
+                                    _safeMapMove(point, z);
+                                  },
+                                  child: CctvClusterBadge(count: p.count),
+                                )
+                              : Icon(
+                                  _infraIcon(p.item?.type),
+                                  color: infraMarkerColor(p.item?.type),
+                                  size: 20,
+                                ),
                         ),
-                    ],
-                  ),
                 ],
+              ),
+              // 내 위치 — 전용 ValueListenable (격자/제보 레이어와 분리 repaint)
+              ValueListenableBuilder<_MyLocPaint>(
+                valueListenable: _myLocPaint,
+                builder: (context, paint, _) {
+                  final myPoint = paint.pos;
+                  if (myPoint == null) {
+                    return const MarkerLayer(markers: []);
+                  }
+                  return MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: myPoint,
+                        width: 40,
+                        height: 40,
+                        alignment: Alignment.center,
+                        child: _MyLocationDot(headingRad: paint.headingRad),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
 
-            // 상단 바: 내정보 + 검색 + 칩
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Material(
-                            elevation: 3,
-                            shadowColor: Colors.black38,
-                            surfaceTintColor: Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            color: Colors.white,
-                            clipBehavior: Clip.antiAlias,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                              ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _searchCtrl,
-                                      style: const TextStyle(
-                                        color: Color(0xFF0F172A),
+          // 상단 바: 내정보 + 검색 + 칩
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Material(
+                          elevation: 3,
+                          shadowColor: Colors.black38,
+                          surfaceTintColor: Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          color: Colors.white,
+                          clipBehavior: Clip.antiAlias,
+                    child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _searchCtrl,
+                                    style: const TextStyle(
+                                      color: Color(0xFF0F172A),
+                                      fontSize: 15,
+                                    ),
+                                    cursorColor: MapUiColors.accent,
+                                    onTap: _onUserActivity,
+                                    onChanged: (_) => _onUserActivity(),
+                                    decoration: const InputDecoration(
+                                      hintText: '장소 검색',
+                                      hintStyle: TextStyle(
+                                        color: Color(0xFF64748B),
                                         fontSize: 15,
                                       ),
                                       cursorColor: MapUiColors.accent,
@@ -1223,6 +1705,90 @@ class _MapPageState extends State<MapPage> {
                             ),
                           ),
                         ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _TopChip(
+                          label: _followMe ? '내 위치' : '내 위치',
+                          onTap: _myLocation,
+                          icon: _followMe
+                              ? Icons.gps_fixed
+                              : Icons.my_location,
+                          selected: _followMe,
+                        ),
+                        const SizedBox(width: 6),
+                        _TopChip(
+                          label: map.infraVisible
+                              ? (map.visibleInfraTypes.length ==
+                                      kInfraTypes.length
+                                  ? '인프라'
+                                  : '인프라 · ${map.visibleInfraTypes.length}종')
+                              : '인프라 · 숨김',
+                          selected: map.infraVisible,
+                          onTap: () {
+                            _onUserActivity();
+                            setState(() {
+                              _nearbyMenu = !_nearbyMenu;
+                              _gridMenu = false;
+                              _accidentMenu = false;
+                            });
+                          },
+                          onLongPress: () {
+                            _onUserActivity();
+                            context.read<MapProvider>().toggleInfra();
+                          },
+                        ),
+                        const SizedBox(width: 6),
+                        _TopChip(
+                          label: map.gridsVisible
+                              ? (map.visibleGrades.length == kSafetyGrades.length
+                                  ? '격자'
+                                  : '격자 · ${map.visibleGrades.length}종')
+                              : '격자 · 숨김',
+                          selected: map.gridsVisible,
+                          onTap: () {
+                            _onUserActivity();
+                            setState(() {
+                              _gridMenu = !_gridMenu;
+                              _nearbyMenu = false;
+                              _accidentMenu = false;
+                            });
+                          },
+                          onLongPress: () {
+                            _onUserActivity();
+                            context.read<MapProvider>().toggleGrids();
+                          },
+                        ),
+                        const SizedBox(width: 6),
+                        _TopChip(
+                          label: _accidentChipLabel(map),
+                          selected: map.accidentZonesVisible,
+                          onTap: () {
+                            _onUserActivity();
+                            setState(() {
+                              _accidentMenu = !_accidentMenu;
+                              _nearbyMenu = false;
+                              _gridMenu = false;
+                            });
+                          },
+                          onLongPress: () {
+                            _onUserActivity();
+                            _toggleAccidentZonesUi();
+                          },
+                        ),
+                        if (map.loading) ...[
+                          const SizedBox(width: 8),
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -1340,39 +1906,40 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
 
-            // 하단 패널 (핸들 드래그로 높이 조절 · 탭 공통)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: railH,
-              child: AnimatedContainer(
-                duration: _panelDragging
-                    ? Duration.zero
-                    : const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                height: panelH,
-                child: _PanelBody(
-                  tab: _panelTab,
-                  expanded: _panelExpanded,
-                  map: map,
-                  selectedReportId: _selectedReportId,
-                  selectedEventId: _selectedEventId,
-                  myReports: _myReports,
-                  myLoading: _myLoading,
-                  myError: _myError,
-                  onSelectReport: (r) => _selectReport(r, moveMap: true),
-                  onSelectEvent: (e) => _selectEvent(e, moveMap: true),
-                  onSelectMyReport: (r) {
-                    // 지도 목록에 동일 id가 있으면 마커·말풍선까지 동기화
-                    final id = r.id is int
-                        ? r.id as int
-                        : int.tryParse('${r.id}');
-                    if (id != null) {
-                      for (final item in map.reports) {
-                        if (item.id == id) {
-                          _selectReport(item, moveMap: true);
-                          return;
-                        }
+          // 하단 패널 (핸들 드래그로 높이 조절 · 탭 공통)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: railH,
+            child: AnimatedContainer(
+              duration: _panelDragging
+                  ? Duration.zero
+                  : const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              height: panelH,
+              child: _PanelBody(
+                tab: _panelTab,
+                expanded: _panelExpanded,
+                map: map,
+                selectedReportId: _selectedReportId,
+                selectedEventId: _selectedEventId,
+                myReports: _myReports,
+                myLoading: _myLoading,
+                myError: _myError,
+                onUserActivity: _onUserActivity,
+                onSelectReport: (r) => _selectReport(r, moveMap: true),
+                onSelectEvent: (e) => _selectEvent(e, moveMap: true),
+                onSelectMyReport: (r) {
+                  _onMapUserGesture();
+                  // 지도 목록에 동일 id가 있으면 마커·말풍선까지 동기화
+                  final id = r.id is int
+                      ? r.id as int
+                      : int.tryParse('${r.id}');
+                  if (id != null) {
+                    for (final item in map.reports) {
+                      if (item.id == id) {
+                        _selectReport(item, moveMap: true);
+                        return;
                       }
                     }
                     final p = tryLatLng(r.lat, r.lng);
@@ -1388,16 +1955,70 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
 
-            // 제보 FAB — 패널 우측 위, 패널 높이에 따라 함께 상승
-            AnimatedPositioned(
-              duration: _panelDragging
-                  ? Duration.zero
-                  : const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              right: 12,
-              bottom: railH + panelH + 10,
-              child: Material(
-                elevation: 4,
+          // 주변알림 FAB — 제보 반대편(좌측), 패널과 함께 상승
+          AnimatedPositioned(
+            duration: _panelDragging
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            left: 12,
+            bottom: railH + panelH + 10,
+            child: Consumer<NearbyMonitor>(
+              builder: (context, monitor, _) {
+                final on = monitor.enabled;
+                return Tooltip(
+                  message: on ? '주변알림 ON' : '주변알림',
+                  child: Material(
+                    elevation: 4,
+                    shape: const CircleBorder(),
+                    color:Colors.white,
+                    shadowColor: Colors.black38,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: monitor.busy
+                          ? null
+                          : () {
+                              _onUserActivity();
+                              unawaited(_toggleNearbyMonitor());
+                            },
+                      child: SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: monitor.busy
+                            ? Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: MapUiColors.accent,
+                                ),
+                              )
+                            : Icon(
+                          on ? Icons.notifications_active : Icons.notifications_none,
+                          color: on ? MapUiColors.accent : const Color(0xFF0F172A),
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          // 제보 FAB — 패널 우측 위, 패널 높이에 따라 함께 상승
+          AnimatedPositioned(
+            duration: _panelDragging
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            right: 12,
+            bottom: railH + panelH + 10,
+            child: Material(
+              elevation: 4,
+              borderRadius: BorderRadius.circular(28),
+              color: Colors.white,
+              shadowColor: Colors.black38,
+              child: InkWell(
                 borderRadius: BorderRadius.circular(28),
                 color: Colors.white,
                 shadowColor: Colors.black38,
@@ -1521,6 +2142,14 @@ class _MapPageState extends State<MapPage> {
 }
 
 // --- UI bits ---
+
+/// 내 위치 마커 페인트 스냅샷 (ValueNotifier 페이로드)
+class _MyLocPaint {
+  const _MyLocPaint({this.pos, this.headingRad = 0});
+
+  final LatLng? pos;
+  final double headingRad;
+}
 
 class _TopChip extends StatelessWidget {
   const _TopChip({
@@ -1775,27 +2404,82 @@ class _AccidentFilterRow extends StatelessWidget {
 }
 
 class _MyLocationDot extends StatelessWidget {
-  const _MyLocationDot();
+  const _MyLocationDot({required this.headingRad});
+
+  final double headingRad;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 22,
-      height: 22,
-      decoration: BoxDecoration(
-        color: MapUiColors.accent,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
-        boxShadow: [
-          BoxShadow(
-            color: MapUiColors.accent.withValues(alpha: 0.35),
-            blurRadius: 8,
-            spreadRadius: 2,
+    final accent = MapUiColors.accent;
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // 진행 방향 (북쪽 0 = 위, Transform은 반시계 기준 → heading 라디안 그대로 사용)
+          Transform.rotate(
+            angle: headingRad,
+            child: Align(
+              alignment: const Alignment(0, -0.85),
+              child: CustomPaint(
+                size: const Size(12, 10),
+                painter: _HeadingChevronPainter(color: accent),
+              ),
+            ),
+          ),
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: accent,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.35),
+                  blurRadius: 8,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
+}
+
+class _HeadingChevronPainter extends CustomPainter {
+  _HeadingChevronPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    // package 측 Path<LatLng> 와 구분
+    final path = ui.Path()
+      ..moveTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(size.width / 2, size.height * 0.65)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _HeadingChevronPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class _RailTab extends StatelessWidget {
@@ -1850,6 +2534,7 @@ class _PanelBody extends StatelessWidget {
     required this.myReports,
     required this.myLoading,
     required this.myError,
+    required this.onUserActivity,
     required this.onSelectReport,
     required this.onSelectEvent,
     required this.onSelectMyReport,
@@ -1866,6 +2551,7 @@ class _PanelBody extends StatelessWidget {
   final List<MyReport> myReports;
   final bool myLoading;
   final String? myError;
+  final VoidCallback onUserActivity;
   final void Function(ReportItem) onSelectReport;
   final void Function(CityEventItem) onSelectEvent;
   final void Function(MyReport) onSelectMyReport;
@@ -1932,7 +2618,18 @@ class _PanelBody extends StatelessWidget {
           ),
           if (expanded) ...[
             const Divider(height: 1),
-            Expanded(child: _buildContent(context)),
+            Expanded(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (n) {
+                  if (n is ScrollUpdateNotification ||
+                      n is ScrollStartNotification) {
+                    onUserActivity();
+                  }
+                  return false;
+                },
+                child: _buildContent(context),
+              ),
+            ),
           ],
         ],
       ),
