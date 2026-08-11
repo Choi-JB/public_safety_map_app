@@ -26,6 +26,11 @@ import '../../widgets/infra_cluster.dart';
 import '../../widgets/media_image.dart';
 import '../../widgets/report_markers.dart';
 
+/// 기본 맵 줌
+const double _defaultMapZoom = 17;
+/// 내 위치 마커 줌
+const double _myLocationZoom = 17;
+
 /// 하단 패널 탭 (웹 좌측 레일: 격자 / 행사 / 제보 / 내 제보)
 enum MapPanelTab { grid, event, report, myReport }
 
@@ -40,7 +45,6 @@ String _accidentChipLabel(MapProvider map) {
   }
   return '위험구간 · $n종';
 }
-
 class MapPage extends StatefulWidget {
   const MapPage({super.key, this.focus});
 
@@ -94,6 +98,12 @@ class _MapPageState extends State<MapPage>
   /// follow 중 MapProvider.setCenter 스로틀 (매 프레임 notify 방지)
   DateTime? _lastFollowProviderSync;
   static const _followProviderSyncInterval = Duration(seconds: 1);
+  /// 내 위치 등에서 지정한 follow 줌. null 이면 카메라 현재 줌 유지.
+  double? _followZoomOverride;
+  /// follow 중 뷰포트(격자·인프라) 재조회: 마지막 로드 위치
+  LatLng? _lastFollowLoadPos;
+  /// follow 중 이 거리(m) 이상 이동 시 1회 로드
+  static const double _followLoadMinMeters = 230;
   /// 프로그램 이동으로 인한 map 이벤트를 사용자 제스처로 오인 방지
   bool _programmaticCamera = false;
   GoRouter? _router;
@@ -260,6 +270,7 @@ class _MapPageState extends State<MapPage>
 
   /// 사용자 맵 제스처 → 따라가기 OFF + idle (1-A)
   void _onMapUserGesture() {
+    _followZoomOverride = null;
     if (!_followMe) {
       _onUserActivity();
       return;
@@ -313,28 +324,38 @@ class _MapPageState extends State<MapPage>
     }
     final p = _displayPos ?? _myPos;
     if (p == null) return;
-    double z = zoom ?? 15;
-    try {
-      if (zoom == null) z = safeZoom(_mapController.camera.zoom);
-    } catch (_) {
-      z = zoom ?? 15;
+
+    double z;
+    if (zoom != null) {
+      z = safeZoom(zoom);
+      _followZoomOverride = z; // follow 중 줌 유지
+    } else {
+      try {
+        z = safeZoom(_followZoomOverride ?? _mapController.camera.zoom);
+      } catch (_) {
+        z = safeZoom(_followZoomOverride ?? _defaultMapZoom);
+      }
     }
     _safeMapMove(p, z);
   }
 
-  void _syncFollowCamera() {
+    void _syncFollowCamera() {
     if (!_followMe || !mounted || !_isMapRouteActive) return;
     final raw = _displayPos ?? _myPos;
     if (raw == null) return;
     final p = tryLatLng(raw.latitude, raw.longitude);
     if (p == null) return;
-    double z = 15;
+    double z;
     try {
-      z = safeZoom(_mapController.camera.zoom);
-    } catch (_) {}
-    if (!_mapLayoutReady()) return;
-    if (!_cameraHealthy()) return;
-    _programmaticCamera = true;
+      z = safeZoom(
+        _followZoomOverride ?? _mapController.camera.zoom,
+      );
+    } catch (_) {
+      z = safeZoom(_followZoomOverride ?? _defaultMapZoom);
+    }
+    if (!_cameraHealthy() || !_mapLayoutReady()) return;
+
+    _programmaticCamera = true; //GPS follow 이동 ≠ 사용자 제스처
     try {
       // 카메라는 매 프레임 추적 (가벼운 move)
       _mapController.move(p, z);
@@ -349,13 +370,15 @@ class _MapPageState extends State<MapPage>
           now.difference(last) >= _followProviderSyncInterval) {
         _lastFollowProviderSync = now;
         mp.setCenter(p);
+        _maybeLoadAroundWhileFollowing(p, z); // follow 중 이 거리(m) 이상 이동 시 1회 로드
       }
     } catch (_) {
       // ignore — remount 경로에 맡김
+    } finally {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _programmaticCamera = false;
+      });
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _programmaticCamera = false;
-    });
   }
 
   static bool _isUserMapGestureSource(MapEventSource source) {
@@ -422,17 +445,17 @@ class _MapPageState extends State<MapPage>
   LocationSettings _mapGpsSettings() {
     if (defaultTargetPlatform == TargetPlatform.android) {
       return AndroidSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-        intervalDuration: const Duration(milliseconds: 300),
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 3,
+        intervalDuration: const Duration(milliseconds: 500),
       );
     }
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       return AppleSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 3,
         activityType: ActivityType.otherNavigation,
-        pauseLocationUpdatesAutomatically: false,
+        pauseLocationUpdatesAutomatically: true,
       );
     }
     return const LocationSettings(
@@ -712,7 +735,7 @@ class _MapPageState extends State<MapPage>
         final p = tryLatLng(pos.latitude, pos.longitude);
         if (p != null) {
           c = p;
-          z = 15;
+          z = _myLocationZoom;
           if (mounted) {
             _snapMyLocation(
               p,
@@ -758,6 +781,27 @@ class _MapPageState extends State<MapPage>
           neLng: neLng,
           newCenter: safeCenter,
         );
+  }
+
+    /// follow ON일 때만: 마지막 로드 지점에서 [_followLoadMinMeters] 이상 이동 시 갱신
+  void _maybeLoadAroundWhileFollowing(LatLng pos, double zoom) {
+    if (!_followMe) return;
+    final p = tryLatLng(pos.latitude, pos.longitude);
+    if (p == null) return;
+
+    final last = _lastFollowLoadPos;
+    if (last != null) {
+      final m = Geolocator.distanceBetween(
+        last.latitude,
+        last.longitude,
+        p.latitude,
+        p.longitude,
+      );
+      if (m < _followLoadMinMeters) return;
+    }
+
+    _lastFollowLoadPos = p;
+    _scheduleLoadAround(p, zoom);
   }
 
   /// 제스처(MapEventMoveEnd) 전용 — 700ms 안 추가 이동이면 마지막 좌표만 조회
@@ -841,8 +885,10 @@ class _MapPageState extends State<MapPage>
       return;
     }
     // 5-B: 1회 센터 + 따라가기 ON
-    _enableFollowAndCenter(zoom: 15);
-    await _loadAround(latLng, 15);
+    _followZoomOverride = _myLocationZoom;
+    _enableFollowAndCenter(zoom: _myLocationZoom);
+    await _loadAround(latLng, _myLocationZoom);
+    _lastFollowLoadPos = latLng;
   }
 
   Future<void> _runSearch() async {
