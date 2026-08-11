@@ -14,6 +14,7 @@ import '../../core/config/env.dart';
 import '../../core/config/media_url.dart';
 import '../../core/format/event_text.dart';
 import '../../core/geo/geo_utils.dart';
+import '../../core/geo/region_code.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/models.dart';
@@ -25,6 +26,11 @@ import '../../services/nearby_report_alert.dart';
 import '../../widgets/infra_cluster.dart';
 import '../../widgets/media_image.dart';
 import '../../widgets/report_markers.dart';
+
+//nav
+import '../../providers/nav_provider.dart';
+import '../nav/nav_route_layer.dart';
+import '../nav/nav_sheet.dart';
 
 /// 기본 맵 줌
 const double _defaultMapZoom = 17;
@@ -266,6 +272,10 @@ class _MapPageState extends State<MapPage>
     if (p == null || !mounted) return;
     final nextHeading = _resolveHeadingRad(pos, p);
     _animateMyLocationTo(p, headingRad: nextHeading);
+    final nav = context.read<NavProvider>();
+    if (nav.guiding) {
+      nav.updateGuideProgress(p);
+    }
   }
 
   /// 사용자 맵 제스처 → 따라가기 OFF + idle (1-A)
@@ -910,6 +920,77 @@ class _MapPageState extends State<MapPage>
     await _loadAround(point, 14);
   }
 
+  /// 지도 롱프레스 → 역지오코딩 → 검색창에 주소 입력
+  Future<void> _fillSearchFromLongPress(LatLng latLng) async {
+    if (!isValidLatLng(latLng.latitude, latLng.longitude)) return;
+    _onUserActivity();
+    _onMapUserGesture();
+
+    setState(() => _searching = true);
+    final address = await coordToAddress(
+      lat: latLng.latitude,
+      lng: latLng.longitude,
+    );
+    if (!mounted) return;
+    setState(() => _searching = false);
+
+    if (address == null || address.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('주소를 찾지 못했습니다')),
+      );
+      return;
+    }
+
+    _searchCtrl.text = address;
+    _searchCtrl.selection = TextSelection.collapsed(offset: address.length);
+  }
+
+  /// 검색창 주소 → 도착지, GPS → 출발지 로 길찾기
+  Future<void> _runNavSearch() async {
+    final q = _searchCtrl.text.trim();
+    if (q.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('도착지 주소를 입력하세요')),
+      );
+      return;
+    }
+    if (_myPos == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('현재 위치를 확인할 수 없습니다. 위치 권한을 확인해 주세요.'),
+        ),
+      );
+      return;
+    }
+
+    _onUserActivity();
+    setState(() => _searching = true);
+    final point = await context.read<MapProvider>().searchPlace(q);
+    if (!mounted) return;
+    setState(() => _searching = false);
+
+    if (point == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('검색 결과가 없습니다')),
+      );
+      return;
+    }
+
+    final nav = context.read<NavProvider>();
+    if (!nav.active) {
+      nav.toggleActive(myPos: _myPos);
+    } else {
+      nav.setOrigin(_myPos);
+    }
+    nav.setDestination(point);
+    await nav.plan();
+    if (!mounted) return;
+
+    _onMapUserGesture();
+    _safeMapMove(point, 14);
+    await _loadAround(point, 14);
+  }
+
   Future<void> _loadMyReports() async {
     final auth = context.read<AuthProvider>();
     if (!auth.isLoggedIn) {
@@ -1161,7 +1242,9 @@ class _MapPageState extends State<MapPage>
     final railH = 56.0 + (bottomPad.isFinite ? bottomPad : 0);
     final map = context.read<MapProvider>();
     final panelH = _resolvePanelHeight(screenH, map);
-    final freeH = (screenH - panelH - railH).clamp(120.0, screenH);
+    final nav = context.read<NavProvider>();
+    final guideH = nav.guiding ? NavGuidanceBar.preferredHeight : 0.0;
+    final freeH = (screenH - panelH - guideH - railH).clamp(120.0, screenH);
 
     final targetYFromTop = freeH * 0.58;
     final screenCenterY = screenH / 2;
@@ -1270,14 +1353,64 @@ class _MapPageState extends State<MapPage>
     return '${short(a)} ~ ${short(b)}';
   }
 
+  void _onSelectMyReportFromPanel(MyReport r, MapProvider map) {
+    _onMapUserGesture();
+    final id = r.id is int ? r.id as int : int.tryParse('${r.id}');
+    if (id != null) {
+      for (final item in map.reports) {
+        if (item.id == id) {
+          _selectReport(item, moveMap: true);
+          return;
+        }
+      }
+    }
+    final p = tryLatLng(r.lat, r.lng);
+    if (p != null) {
+      _focusMapOn(p, zoom: 16);
+      _loadAround(p, 16);
+    }
+  }
+
+  Widget _buildBottomPanelBody({
+    required MapProvider map,
+    required double screenH,
+    required bool nestInParent,
+  }) {
+    return _PanelBody(
+      tab: _panelTab,
+      expanded: _panelExpanded,
+      map: map,
+      selectedReportId: _selectedReportId,
+      selectedEventId: _selectedEventId,
+      myReports: _myReports,
+      myLoading: _myLoading,
+      myError: _myError,
+      onUserActivity: _onUserActivity,
+      onSelectReport: (r) => _selectReport(r, moveMap: true),
+      onSelectEvent: (e) => _selectEvent(e, moveMap: true),
+      onSelectMyReport: (r) => _onSelectMyReportFromPanel(r, map),
+      formatRange: _formatRange,
+      onDragUpdate: (d) => _onPanelDragUpdate(d, screenH, map),
+      onDragEnd: (d) => _onPanelDragEnd(d, screenH, map),
+      nestInParent: nestInParent,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final map = context.watch<MapProvider>();
     final auth = context.watch<AuthProvider>();
+    final nav = context.watch<NavProvider>();
     final bottomPad = MediaQuery.paddingOf(context).bottom;
     final screenH = MediaQuery.sizeOf(context).height;
     final railH = 56.0 + bottomPad;
     final panelH = _resolvePanelHeight(screenH, map);
+    final guideH = nav.guiding ? NavGuidanceBar.preferredHeight : 0.0;
+    // FAB: 안내 중엔 합쳐진 패널 바로 위, 경로선택 중엔 살짝만
+    final fabNavGap = nav.guiding
+        ? guideH + 6
+        : (nav.active ? 8.0 : 10.0);
+    final fabBottom = railH + panelH + fabNavGap;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
@@ -1354,9 +1487,12 @@ class _MapPageState extends State<MapPage>
                     hit = g;
                   }
                 }
-                  if (hit != null && best.isFinite && best < Env.gridCellDeg) {
-                    _onGridTap(hit.gridId);
-                  }
+              if (hit != null && best.isFinite && best < Env.gridCellDeg) {
+                  _onGridTap(hit.gridId);
+                }
+              },
+              onLongPress: (_, latLng) {
+                unawaited(_fillSearchFromLongPress(latLng));
               },
             ),
             children: [
@@ -1397,6 +1533,7 @@ class _MapPageState extends State<MapPage>
                         ),
                   ],
                 ),
+              const NavRouteLayer(),
               MarkerLayer(
                 markers: [
                     // 제보: 핀 + 선택 시 사진 말풍선
@@ -1497,7 +1634,21 @@ class _MapPageState extends State<MapPage>
             ],
           ),
           ),
-
+          // 경로 선택 시트 (안내 중에는 하단 패널과 통합)
+          if (nav.active && !nav.guiding)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: railH + panelH,
+              child: NavSheet(
+                myPos: _myPos,
+                onGuidanceStarted: () {
+                  _followZoomOverride = _myLocationZoom;
+                  _enableFollowAndCenter(zoom: _myLocationZoom);
+                  _tryStartLocationTracking(requestPermission: true);
+                },
+              ),
+            ),
           // 상단 바: 내정보 + 검색 + 칩
           SafeArea(
             child: Padding(
@@ -1519,6 +1670,17 @@ class _MapPageState extends State<MapPage>
                             padding: const EdgeInsets.symmetric(horizontal: 6),
                             child: Row(
                               children: [
+                                IconButton(
+                                  tooltip: '길찾기',
+                                  onPressed:
+                                      _searching ? null : _runNavSearch,
+                                  icon: Icon(
+                                    Icons.directions,
+                                    color: nav.active
+                                        ? MapUiColors.accent
+                                        : const Color(0xFF0F172A),
+                                  ),
+                                ),
                                 Expanded(
                                   child: TextField(
                                     controller: _searchCtrl,
@@ -1530,7 +1692,7 @@ class _MapPageState extends State<MapPage>
                                     onTap: _onUserActivity,
                                     onChanged: (_) => _onUserActivity(),
                                     decoration: const InputDecoration(
-                                      hintText: '장소 검색',
+                                      hintText: '장소 검색 · 길찾기 도착지',
                                       hintStyle: TextStyle(
                                         color: Color(0xFF64748B),
                                         fontSize: 15,
@@ -1541,7 +1703,7 @@ class _MapPageState extends State<MapPage>
                                       filled: false,
                                       isDense: true,
                                       contentPadding: EdgeInsets.symmetric(
-                                        horizontal: 10,
+                                        horizontal: 4,
                                         vertical: 10,
                                       ),
                                     ),
@@ -1715,7 +1877,7 @@ class _MapPageState extends State<MapPage>
             ),
           ),
 
-          // 하단 패널 (핸들 드래그로 높이 조절 · 탭 공통)
+          // 하단 패널 (안내 중이면 안내 바와 한 Material)
           Positioned(
             left: 0,
             right: 0,
@@ -1725,54 +1887,45 @@ class _MapPageState extends State<MapPage>
                   ? Duration.zero
                   : const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
-              height: panelH,
-              child: _PanelBody(
-                tab: _panelTab,
-                expanded: _panelExpanded,
-                map: map,
-                selectedReportId: _selectedReportId,
-                selectedEventId: _selectedEventId,
-                myReports: _myReports,
-                myLoading: _myLoading,
-                myError: _myError,
-                onUserActivity: _onUserActivity,
-                onSelectReport: (r) => _selectReport(r, moveMap: true),
-                onSelectEvent: (e) => _selectEvent(e, moveMap: true),
-                onSelectMyReport: (r) {
-                  _onMapUserGesture();
-                  // 지도 목록에 동일 id가 있으면 마커·말풍선까지 동기화
-                  final id = r.id is int
-                      ? r.id as int
-                      : int.tryParse('${r.id}');
-                  if (id != null) {
-                    for (final item in map.reports) {
-                      if (item.id == id) {
-                        _selectReport(item, moveMap: true);
-                        return;
-                      }
-                    }
-                  }
-                  final p = tryLatLng(r.lat, r.lng);
-                  if (p != null) {
-                    _focusMapOn(p, zoom: 16);
-                    _loadAround(p, 16);
-                  }
-                },
-                formatRange: _formatRange,
-                onDragUpdate: (d) => _onPanelDragUpdate(d, screenH, map),
-                onDragEnd: (d) => _onPanelDragEnd(d, screenH, map),
-              ),
+              height: panelH + guideH,
+              child: nav.guiding
+                  ? Material(
+                      elevation: 10,
+                      color: Colors.white,
+                      surfaceTintColor: Colors.transparent,
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(14)),
+                      clipBehavior: Clip.antiAlias,
+                      child: Column(
+                        children: [
+                          NavGuidanceBar(nav: nav),
+                          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                          Expanded(
+                            child: _buildBottomPanelBody(
+                              map: map,
+                              screenH: screenH,
+                              nestInParent: true,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _buildBottomPanelBody(
+                      map: map,
+                      screenH: screenH,
+                      nestInParent: false,
+                    ),
             ),
           ),
 
-          // 주변알림 FAB — 제보 반대편(좌측), 패널과 함께 상승
+          // 주변알림 FAB — 제보 반대편(좌측), 패널·길찾기 시트와 함께 상승
           AnimatedPositioned(
             duration: _panelDragging
                 ? Duration.zero
                 : const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
             left: 12,
-            bottom: railH + panelH + 10,
+            bottom: fabBottom,
             child: Consumer<NearbyMonitor>(
               builder: (context, monitor, _) {
                 final on = monitor.enabled;
@@ -1815,14 +1968,14 @@ class _MapPageState extends State<MapPage>
             ),
           ),
 
-          // 제보 FAB — 패널 우측 위, 패널 높이에 따라 함께 상승
+          // 제보 FAB — 패널·길찾기 시트 우측 위
           AnimatedPositioned(
             duration: _panelDragging
                 ? Duration.zero
                 : const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
             right: 12,
-            bottom: railH + panelH + 10,
+            bottom: fabBottom,
             child: Material(
               elevation: 4,
               borderRadius: BorderRadius.circular(28),
@@ -2351,6 +2504,7 @@ class _PanelBody extends StatelessWidget {
     required this.formatRange,
     required this.onDragUpdate,
     required this.onDragEnd,
+    this.nestInParent = false,
   });
 
   final MapPanelTab tab;
@@ -2368,6 +2522,8 @@ class _PanelBody extends StatelessWidget {
   final String Function(String?, String?) formatRange;
   final void Function(DragUpdateDetails) onDragUpdate;
   final void Function(DragEndDetails) onDragEnd;
+  /// true면 바깥 Material에 포함 (자체 elevation/radius 없음)
+  final bool nestInParent;
 
   String get _title => switch (tab) {
         MapPanelTab.grid => '격자 정보',
@@ -2378,71 +2534,75 @@ class _PanelBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final body = Column(
+      children: [
+        // 핸들: 드래그로만 높이 조절 (탭 토글 없음)
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragUpdate: onDragUpdate,
+          onVerticalDragEnd: onDragEnd,
+          child: SizedBox(
+            height: 52,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 5,
+                          margin: const EdgeInsets.only(bottom: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF94A3B8),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                        ),
+                        Text(
+                          _title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                            color: Color(0xFF0F172A),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (expanded) ...[
+          const Divider(height: 1),
+          Expanded(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (n) {
+                if (n is ScrollUpdateNotification ||
+                    n is ScrollStartNotification) {
+                  onUserActivity();
+                }
+                return false;
+              },
+              child: _buildContent(context),
+            ),
+          ),
+        ],
+      ],
+    );
+
+    if (nestInParent) return body;
+
     return Material(
       elevation: 10,
       color: Colors.white,
       surfaceTintColor: Colors.transparent,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          // 핸들: 드래그로만 높이 조절 (탭 토글 없음)
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onVerticalDragUpdate: onDragUpdate,
-            onVerticalDragEnd: onDragEnd,
-            child: SizedBox(
-              height: 52,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 5,
-                            margin: const EdgeInsets.only(bottom: 6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF94A3B8),
-                              borderRadius: BorderRadius.circular(3),
-                            ),
-                          ),
-                          Text(
-                            _title,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                              color: Color(0xFF0F172A),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          if (expanded) ...[
-            const Divider(height: 1),
-            Expanded(
-              child: NotificationListener<ScrollNotification>(
-                onNotification: (n) {
-                  if (n is ScrollUpdateNotification ||
-                      n is ScrollStartNotification) {
-                    onUserActivity();
-                  }
-                  return false;
-                },
-                child: _buildContent(context),
-              ),
-            ),
-          ],
-        ],
-      ),
+      child: body,
     );
   }
 

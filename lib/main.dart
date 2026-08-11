@@ -23,6 +23,9 @@ import 'providers/auth_provider.dart';
 import 'providers/map_provider.dart';
 import 'services/nearby_monitor.dart';
 import 'services/nearby_report_alert.dart';
+//nav
+import 'data/repositories/direction_repository.dart';
+import 'providers/nav_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,6 +34,9 @@ Future<void> main() async {
 
   final authRepo = AuthRepository(api);
   final mapRepo = MapRepository(api);
+  //nav
+  final directionRepo = DirectionRepository();
+
   final reportRepo = ReportRepository(api);
   final feedbackRepo = FeedbackRepository(api);
   final mypageRepo = MyPageRepository(api);
@@ -59,6 +65,10 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: nearbyMonitor),
         ChangeNotifierProvider.value(value: auth),
         ChangeNotifierProvider.value(value: mapProvider),
+        //nav
+        ChangeNotifierProvider(
+          create: (_) => NavProvider(directionRepo, mapRepo),
+),
       ],
       child: SafetyMapApp(auth: auth, nearbyAlert: nearbyAlert),
     ),
