@@ -61,3 +61,52 @@ Future<({String siDo, String guGun})?> coordToSiDoGuGun({
     return null;
   }
 }
+
+/// 카카오 REST 좌표→주소 (도로명 우선, 없으면 지번).
+Future<String?> coordToAddress({
+  required double lat,
+  required double lng,
+}) async {
+  if (!isValidLatLng(lat, lng)) return null;
+  final key = Env.kakaoRestApiKey.trim();
+  if (key.isEmpty) return null;
+
+  try {
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 8),
+      ),
+    );
+    final res = await dio.get<Map<String, dynamic>>(
+      'https://dapi.kakao.com/v2/local/geo/coord2address.json',
+      queryParameters: {
+        'x': lng,
+        'y': lat,
+      },
+      options: Options(
+        headers: {'Authorization': 'KakaoAK $key'},
+      ),
+    );
+
+    final docs = res.data?['documents'];
+    if (docs is! List || docs.isEmpty) return null;
+    final first = docs.first;
+    if (first is! Map) return null;
+    final m = Map<String, dynamic>.from(first);
+
+    final road = m['road_address'];
+    if (road is Map) {
+      final name = road['address_name']?.toString().trim();
+      if (name != null && name.isNotEmpty) return name;
+    }
+    final addr = m['address'];
+    if (addr is Map) {
+      final name = addr['address_name']?.toString().trim();
+      if (name != null && name.isNotEmpty) return name;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
