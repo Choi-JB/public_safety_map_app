@@ -42,7 +42,7 @@ class MapProvider extends ChangeNotifier {
   }
 
   LatLng center = defaultMapCenter();
-  double zoom = 14;
+  double zoom = 17;
 
   bool gridsVisible = true;
   bool infraVisible = false;
