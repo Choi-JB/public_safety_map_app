@@ -148,6 +148,15 @@ class _MapPageState extends State<MapPage>
   bool _gridMenu = false;
   bool _accidentMenu = false;
 
+  void _closeFilterMenus() {
+    if (!_nearbyMenu && !_gridMenu && !_accidentMenu) return;
+    setState(() {
+      _nearbyMenu = false;
+      _gridMenu = false;
+      _accidentMenu = false;
+    });
+  }
+
   /// 경로 fit 전 카메라 — 길찾기 종료 시 복원
   (LatLng, double)? _preRouteCamera;
   bool _navWasActive = false;
@@ -984,6 +993,7 @@ class _MapPageState extends State<MapPage>
   }
 
   Future<void> _myLocation() async {
+    _closeFilterMenus();
     await _tryStartLocationTracking(requestPermission: true);
     if (!mounted) return;
     final latLng = _displayPos ?? _myPos;
@@ -1014,6 +1024,7 @@ class _MapPageState extends State<MapPage>
   Future<void> _runSearch() async {
     final q = _searchCtrl.text.trim();
     if (q.isEmpty) return;
+    _closeFilterMenus();
     _onMapUserGesture(); // 검색 이동 = 탐색 (follow off)
     setState(() => _searching = true);
 
@@ -1145,6 +1156,7 @@ class _MapPageState extends State<MapPage>
 
   /// 도착지: 롱프레스 핀 좌표 우선, 없으면 검색창 지오코딩
   Future<void> _runNavSearch() async {
+    _closeFilterMenus();
     final q = _searchCtrl.text.trim();
     final usePin = _canUsePinnedSearchDest(q);
 
@@ -1332,6 +1344,7 @@ class _MapPageState extends State<MapPage>
   }
 
   void _openPanel(MapPanelTab tab) {
+    _closeFilterMenus();
     _onUserActivity();
     final same = _panelTab == tab;
     final wasOpen = _panelExpanded;
@@ -2092,6 +2105,7 @@ class _MapPageState extends State<MapPage>
                         child: IconButton(
                           tooltip: auth.isLoggedIn ? '내정보' : '로그인',
                           onPressed: () {
+                            _closeFilterMenus();
                             if (auth.isLoggedIn) {
                               context.push('/mypage');
                             } else {
@@ -2262,6 +2276,7 @@ class _MapPageState extends State<MapPage>
                       onTap: monitor.busy
                           ? null
                           : () {
+                              _closeFilterMenus();
                               _onUserActivity();
                               unawaited(_toggleNearbyMonitor());
                             },
@@ -2305,6 +2320,7 @@ class _MapPageState extends State<MapPage>
               child: InkWell(
                 borderRadius: BorderRadius.circular(28),
                 onTap: () {
+                  _closeFilterMenus();
                   if (!auth.isLoggedIn) {
                     context.push('/login');
                     return;
