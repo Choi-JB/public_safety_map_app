@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/geo/geo_utils.dart';
 import '../../core/network/api_exception.dart';
+import '../../core/network/user_error.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/repositories/report_repository.dart';
 import '../../providers/map_provider.dart';
@@ -178,10 +179,11 @@ class _CreateReportPageState extends State<CreateReportPage> {
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+          .showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
