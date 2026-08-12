@@ -27,7 +27,7 @@ class NavProvider extends ChangeNotifier {
   /// 길찾기 시트 높이(px). FAB 상승용. 비활성 시 0.
   double sheetHeight = 0;
   static const double _sheetHeightEstimate = 360;
-  static const double _guideSheetEstimate = 72;
+  static const double _guideSheetEstimate = 76;
 
   /// TMAP·경유 원본 후보 (채점용)
   List<RouteCandidate> candidates = const [];
@@ -145,6 +145,21 @@ class NavProvider extends ChangeNotifier {
     remainingDurationSec = null;
   }
 
+  /// 새 목적지/재탐색: 안내는 끄고 길찾기(경로 선택) 모드는 유지
+  void cancelGuidanceForReplan() {
+    _resetGuidanceFields();
+    selected = null;
+    choiceCards = const [];
+    candidates = const [];
+    compare = null;
+    message = null;
+    error = null;
+    if (active) {
+      sheetHeight = _sheetHeightEstimate;
+    }
+    notifyListeners();
+  }
+
   void updateGuideProgress(LatLng me) {
     if (!guiding) return;
     final route = selected;
@@ -200,12 +215,14 @@ class NavProvider extends ChangeNotifier {
     if (o == null || d == null) return;
     if (!isValidLatLng(o.latitude, o.longitude) ||
         !isValidLatLng(d.latitude, d.longitude)) {
+      cancelGuidanceForReplan();
       error = '좌표가 올바르지 않습니다.';
       notifyListeners();
       return;
     }
 
-    _resetGuidanceFields();
+    // 안내 중 재탐색 시 기존 안내·경로선 즉시 제거
+    cancelGuidanceForReplan();
     loading = true;
     error = null;
     message = null;
