@@ -48,6 +48,9 @@ class NavProvider extends ChangeNotifier {
   double distanceToStepM = 0;
   bool arrived = false;
 
+  /// 목적지 주변 도착 (경로 잔여 / 직선, m). 자동 종료 없음 → 알림에서 안내 종료.
+  static const double _arriveNearM = 10;
+
   void toggleActive({LatLng? myPos}) {
     active = !active;
     if (active) {
@@ -173,7 +176,16 @@ class NavProvider extends ChangeNotifier {
       remainingDurationSec = route.durationSec! * (remain / route.distanceM);
     }
 
-    if (remain <= 25) {
+    final dest = destination;
+    var near = remain <= _arriveNearM;
+    if (!near && dest != null) {
+      final straightM =
+          distKm(me.latitude, me.longitude, dest.latitude, dest.longitude) *
+              1000;
+      near = straightM <= _arriveNearM;
+    }
+
+    if (near) {
       arrived = true;
       currentStep = null;
       distanceToStepM = 0;

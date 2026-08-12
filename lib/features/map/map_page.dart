@@ -24,6 +24,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/map_provider.dart';
 import '../../services/nearby_monitor.dart';
 import '../../services/nearby_report_alert.dart';
+import '../../services/guidance_notification.dart';
 import '../../widgets/infra_cluster.dart';
 import '../../widgets/media_image.dart';
 import '../../widgets/report_markers.dart';
@@ -160,6 +161,8 @@ class _MapPageState extends State<MapPage>
   /// 경로 fit 전 카메라 — 길찾기 종료 시 복원
   (LatLng, double)? _preRouteCamera;
   bool _navWasActive = false;
+  bool _wasGuiding = false;
+  bool _wasArrived = false;
   NavProvider? _navListened;
 
   @override
@@ -190,6 +193,8 @@ class _MapPageState extends State<MapPage>
       _navListened?.removeListener(_onNavProviderChanged);
       _navListened = nav;
       _navWasActive = nav.active;
+      _wasGuiding = nav.guiding;
+      _wasArrived = nav.arrived;
       nav.addListener(_onNavProviderChanged);
     }
   }
@@ -309,6 +314,7 @@ class _MapPageState extends State<MapPage>
     final nav = context.read<NavProvider>();
     if (nav.guiding) {
       nav.updateGuideProgress(p);
+      unawaited(_syncGuidanceNotification(nav));
     }
   }
 
@@ -486,8 +492,22 @@ class _MapPageState extends State<MapPage>
     return _headingRad;
   }
 
-  LocationSettings _mapGpsSettings() {
+  LocationSettings _mapGpsSettings({bool forGuidance = false}) {
     if (defaultTargetPlatform == TargetPlatform.android) {
+      if (forGuidance) {
+        return AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 3,
+          intervalDuration: const Duration(milliseconds: 500),
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: '보행 안내 중',
+            notificationText: '목적지로 길안내를 진행합니다',
+            notificationChannelName: '보행 안내',
+            enableWakeLock: true,
+            setOngoing: true,
+          ),
+        );
+      }
       return AndroidSettings(
         accuracy: LocationAccuracy.high,
         distanceFilter: 3,
@@ -499,7 +519,9 @@ class _MapPageState extends State<MapPage>
         accuracy: LocationAccuracy.high,
         distanceFilter: 3,
         activityType: ActivityType.otherNavigation,
-        pauseLocationUpdatesAutomatically: true,
+        pauseLocationUpdatesAutomatically: !forGuidance,
+        allowBackgroundLocationUpdates: forGuidance,
+        showBackgroundLocationIndicator: forGuidance,
       );
     }
     return const LocationSettings(
@@ -656,6 +678,29 @@ class _MapPageState extends State<MapPage>
       _restorePreRouteCamera();
     }
     _navWasActive = nav.active;
+
+    unawaited(_syncGuidanceNotification(nav));
+
+    if (!_wasArrived && nav.arrived && nav.guiding) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('목적지 주변입니다. 알림에서 안내를 종료할 수 있습니다'),
+        ),
+      );
+    }
+    _wasArrived = nav.arrived;
+
+    if (_wasGuiding && !nav.guiding) {
+      unawaited(_restartLocationTracking(forGuidance: false));
+    }
+    _wasGuiding = nav.guiding;
+  }
+
+  Future<void> _syncGuidanceNotification(NavProvider nav) async {
+    try {
+      final g = context.read<GuidanceNotification>();
+      await g.syncFromNav(nav);
+    } catch (_) {}
   }
 
   void _capturePreRouteCameraIfNeeded() {
@@ -965,6 +1010,7 @@ class _MapPageState extends State<MapPage>
 
   /// GPS 스트림 — 마커를 위치에 따라 갱신
   Future<void> _tryStartLocationTracking({required bool requestPermission}) async {
+    final forGuidance = context.read<NavProvider>().guiding;
     final ok = await _ensureLocationPermission(request: requestPermission);
     if (!ok || !mounted) return;
     if (_posSub != null) return;
@@ -985,7 +1031,21 @@ class _MapPageState extends State<MapPage>
       } catch (_) {}
     }
 
-    final settings = _mapGpsSettings();
+    if (!mounted) return;
+    final settings = _mapGpsSettings(forGuidance: forGuidance);
+    _posSub = Geolocator.getPositionStream(locationSettings: settings).listen(
+      _applyGpsFix,
+      onError: (_) {},
+    );
+  }
+
+  /// 안내 ON/OFF에 맞춰 GPS 스트림 재구독 (Android FGS 알림 포함)
+  Future<void> _restartLocationTracking({required bool forGuidance}) async {
+    final ok = await _ensureLocationPermission(request: true);
+    if (!ok || !mounted) return;
+    await _posSub?.cancel();
+    _posSub = null;
+    final settings = _mapGpsSettings(forGuidance: forGuidance);
     _posSub = Geolocator.getPositionStream(locationSettings: settings).listen(
       _applyGpsFix,
       onError: (_) {},
@@ -1626,7 +1686,10 @@ class _MapPageState extends State<MapPage>
     context.read<MapProvider>().setGridsVisible(false);
     _followZoomOverride = _myLocationZoom;
     _enableFollowAndCenter(zoom: _myLocationZoom);
-    _tryStartLocationTracking(requestPermission: true);
+    _wasGuiding = true;
+    _wasArrived = false;
+    unawaited(_restartLocationTracking(forGuidance: true));
+    unawaited(_syncGuidanceNotification(context.read<NavProvider>()));
   }
 
   /// 경로선택/안내 + 격자 패널을 빈 틈 없이 한 덩어리로
