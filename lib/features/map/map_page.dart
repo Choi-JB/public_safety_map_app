@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
@@ -31,6 +32,7 @@ import '../../widgets/report_markers.dart';
 import '../../providers/nav_provider.dart';
 import '../nav/nav_route_layer.dart';
 import '../nav/nav_sheet.dart';
+import 'long_press_map_menu.dart';
 
 /// 기본 맵 줌
 const double _defaultMapZoom = 17;
@@ -67,6 +69,16 @@ class _MapPageState extends State<MapPage>
   final _searchCtrl = TextEditingController();
   bool _booted = false;
   bool _searching = false;
+  /// 롱프레스로 고른 도착 좌표 (길찾기 시 Nominatim 재검색 생략)
+  LatLng? _pinnedNavDest;
+  /// 핀과 함께 넣은 검색창 문구 — 사용자가 수정하면 핀 무효
+  String? _pinnedNavAddress;
+  /// 롱프레스 메뉴로 고른 출발 (있으면 GPS 대신 사용)
+  LatLng? _pinnedNavOrigin;
+  /// 롱프레스 액션 메뉴
+  LatLng? _longPressPoint;
+  String? _longPressAddress;
+  bool _longPressAddressLoading = false;
   /// FlutterMap 재마운트용 (카메라 NaN 복구)
   int _mapGeneration = 0;
   bool _remountingMap = false;
@@ -121,7 +133,8 @@ class _MapPageState extends State<MapPage>
   /// 드래그 중이면 높이 애니 끄기
   bool _panelDragging = false;
 
-  static const double _collapsedBarH = 52;
+  /// 접힘 높이 추정값 (드래그 스냅·FAB 위치용). 실제 헤더는 intrinsic.
+  static const double _collapsedBarH = 56;
   static const double _expandedFracBase = 0.30;
 
   int? _selectedReportId;
@@ -134,6 +147,11 @@ class _MapPageState extends State<MapPage>
   bool _nearbyMenu = false;
   bool _gridMenu = false;
   bool _accidentMenu = false;
+
+  /// 경로 fit 전 카메라 — 길찾기 종료 시 복원
+  (LatLng, double)? _preRouteCamera;
+  bool _navWasActive = false;
+  NavProvider? _navListened;
 
   @override
   void initState() {
@@ -157,6 +175,13 @@ class _MapPageState extends State<MapPage>
       _router = router;
       _routeListener = _onRouteChanged;
       router.routerDelegate.addListener(_routeListener!);
+    }
+    final nav = context.read<NavProvider>();
+    if (!identical(_navListened, nav)) {
+      _navListened?.removeListener(_onNavProviderChanged);
+      _navListened = nav;
+      _navWasActive = nav.active;
+      nav.addListener(_onNavProviderChanged);
     }
   }
 
@@ -601,6 +626,8 @@ class _MapPageState extends State<MapPage>
     WidgetsBinding.instance.removeObserver(this);
     _viewportDebounce?.cancel();
     _idleFollowTimer?.cancel();
+    _navListened?.removeListener(_onNavProviderChanged);
+    _navListened = null;
     _openReportSub?.cancel();
     _openAccidentSub?.cancel();
     _posSub?.cancel();
@@ -609,6 +636,78 @@ class _MapPageState extends State<MapPage>
     _searchCtrl.dispose();
     _mapController.dispose();
     super.dispose();
+  }
+
+  void _onNavProviderChanged() {
+    if (!mounted) return;
+    final nav = _navListened;
+    if (nav == null) return;
+
+    if (_navWasActive && !nav.active) {
+      _restorePreRouteCamera();
+    }
+    _navWasActive = nav.active;
+  }
+
+  void _capturePreRouteCameraIfNeeded() {
+    if (_preRouteCamera != null) return;
+    try {
+      final cam = _mapController.camera;
+      final c = tryLatLng(cam.center.latitude, cam.center.longitude);
+      if (c == null) return;
+      _preRouteCamera = (c, safeZoom(cam.zoom));
+    } catch (_) {}
+  }
+
+  void _fitSelectedRoute() {
+    final nav = context.read<NavProvider>();
+    if (!nav.active || nav.guiding) return;
+    final pts = nav.selected?.points;
+    if (pts == null || pts.length < 2) return;
+
+    _capturePreRouteCameraIfNeeded();
+    _onMapUserGesture();
+
+    final bottomPad = MediaQuery.paddingOf(context).bottom;
+    final sheetH = nav.sheetHeight > 0 ? nav.sheetHeight : 72;
+    // 상단 검색·칩 + 하단 접힌 경로시트·격자 헤더 여유
+    final pad = EdgeInsets.fromLTRB(
+      48,
+      140,
+      48,
+      (sheetH + 56 + bottomPad + 24).clamp(160.0, 360.0),
+    );
+
+    if (!_mapLayoutReady() || !_cameraHealthy()) {
+      final mid = pts[pts.length ~/ 2];
+      _safeMapMove(mid, 15);
+      return;
+    }
+
+    _programmaticCamera = true;
+    try {
+      _mapController.fitCamera(
+        CameraFit.bounds(
+          bounds: LatLngBounds.fromPoints(pts),
+          padding: pad,
+          maxZoom: 17,
+        ),
+      );
+    } catch (_) {
+      final mid = pts[pts.length ~/ 2];
+      _safeMapMove(mid, 15);
+    } finally {
+      Future<void>.delayed(const Duration(milliseconds: 120), () {
+        if (mounted) _programmaticCamera = false;
+      });
+    }
+  }
+
+  void _restorePreRouteCamera() {
+    final saved = _preRouteCamera;
+    _preRouteCamera = null;
+    if (saved == null || !mounted) return;
+    _safeMapMove(saved.$1, saved.$2);
   }
 
   /// 위험구간 ON/OFF. 알림 검사는 NearbyMonitor(ON) 경로만 사용.
@@ -894,6 +993,8 @@ class _MapPageState extends State<MapPage>
       );
       return;
     }
+    // 내 위치로 돌아가면 롱프레스 출발 고정 해제
+    _pinnedNavOrigin = null;
     // 5-B: 1회 센터 + 따라가기 ON
     _followZoomOverride = _myLocationZoom;
     _enableFollowAndCenter(zoom: _myLocationZoom);
@@ -901,13 +1002,29 @@ class _MapPageState extends State<MapPage>
     _lastFollowLoadPos = latLng;
   }
 
+  /// 롱프레스로 넣은 주소·좌표가 그대로면 true (Nominatim 재검색 생략)
+  bool _canUsePinnedSearchDest(String q) {
+    final pinned = _pinnedNavDest;
+    return pinned != null &&
+        _pinnedNavAddress != null &&
+        q == _pinnedNavAddress &&
+        isValidLatLng(pinned.latitude, pinned.longitude);
+  }
+
   Future<void> _runSearch() async {
     final q = _searchCtrl.text.trim();
     if (q.isEmpty) return;
     _onMapUserGesture(); // 검색 이동 = 탐색 (follow off)
     setState(() => _searching = true);
-    final mp = context.read<MapProvider>();
-    final point = await mp.searchPlace(q);
+
+    LatLng? point;
+    if (_canUsePinnedSearchDest(q)) {
+      // 카카오 주소 → Nominatim 실패 방지: 꾹 누른 좌표로 이동
+      point = _pinnedNavDest;
+    } else {
+      point = await context.read<MapProvider>().searchPlace(q);
+    }
+
     if (!mounted) return;
     setState(() => _searching = false);
     if (point == null) {
@@ -916,45 +1033,129 @@ class _MapPageState extends State<MapPage>
       );
       return;
     }
-    _safeMapMove(point, 14);
-    await _loadAround(point, 14);
+    _safeMapMove(point, 17);
+    await _loadAround(point, 17);
   }
 
-  /// 지도 롱프레스 → 역지오코딩 → 검색창에 주소 입력
-  Future<void> _fillSearchFromLongPress(LatLng latLng) async {
+  void _clearPinnedNavDest() {
+    _pinnedNavDest = null;
+    _pinnedNavAddress = null;
+  }
+
+  void _onSearchTextChanged(String _) {
+    _onUserActivity();
+    final t = _searchCtrl.text.trim();
+    if (_pinnedNavAddress != null && t != _pinnedNavAddress) {
+      _clearPinnedNavDest();
+    }
+  }
+
+  void _dismissLongPressMenu() {
+    if (_longPressPoint == null &&
+        !_longPressAddressLoading &&
+        _longPressAddress == null) {
+      return;
+    }
+    setState(() {
+      _longPressPoint = null;
+      _longPressAddress = null;
+      _longPressAddressLoading = false;
+    });
+  }
+
+  /// 지도 롱프레스 → 출발/도착/주소 메뉴
+  Future<void> _openLongPressMenu(LatLng latLng) async {
     if (!isValidLatLng(latLng.latitude, latLng.longitude)) return;
     _onUserActivity();
     _onMapUserGesture();
 
-    setState(() => _searching = true);
+    setState(() {
+      _longPressPoint = latLng;
+      _longPressAddress = null;
+      _longPressAddressLoading = true;
+    });
+
     final address = await coordToAddress(
       lat: latLng.latitude,
       lng: latLng.longitude,
     );
     if (!mounted) return;
-    setState(() => _searching = false);
+    // 다른 지점을 또 누른 경우 이전 요청 결과 무시
+    if (_longPressPoint != latLng) return;
 
-    if (address == null || address.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('주소를 찾지 못했습니다')),
-      );
-      return;
-    }
-
-    _searchCtrl.text = address;
-    _searchCtrl.selection = TextSelection.collapsed(offset: address.length);
+    setState(() {
+      _longPressAddress = (address != null && address.isNotEmpty)
+          ? address
+          : null;
+      _longPressAddressLoading = false;
+    });
   }
 
-  /// 검색창 주소 → 도착지, GPS → 출발지 로 길찾기
+  String _longPressLabel() {
+    final a = _longPressAddress;
+    if (a != null && a.isNotEmpty) return a;
+    return '선택한 위치';
+  }
+
+  void _onLongPressSetOrigin() {
+    final p = _longPressPoint;
+    if (p == null) return;
+    final nav = context.read<NavProvider>();
+    if (nav.guiding || nav.arrived) {
+      nav.cancelGuidanceForReplan();
+    }
+    _pinnedNavOrigin = p;
+    if (!nav.active) {
+      nav.toggleActive(myPos: p);
+    } else {
+      nav.setOrigin(p);
+    }
+    _dismissLongPressMenu();
+    if (nav.destination != null) {
+      unawaited(nav.plan());
+    }
+  }
+
+  Future<void> _onLongPressSetDestination() async {
+    final p = _longPressPoint;
+    if (p == null) return;
+    final label = _longPressLabel();
+    _pinnedNavDest = p;
+    _pinnedNavAddress = label;
+    _searchCtrl.text = label;
+    _searchCtrl.selection = TextSelection.collapsed(offset: label.length);
+    _dismissLongPressMenu();
+    await _runNavSearch();
+  }
+
+  Future<void> _onLongPressCopyAddress() async {
+    final a = _longPressAddress;
+    final p = _longPressPoint;
+    if (a == null || a.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: a));
+    if (!mounted) return;
+    if (p != null && isValidLatLng(p.latitude, p.longitude)) {
+      _pinnedNavDest = p;
+      _pinnedNavAddress = a;
+    }
+    _searchCtrl.text = a;
+    _searchCtrl.selection = TextSelection.collapsed(offset: a.length);
+    _dismissLongPressMenu();
+  }
+
+  /// 도착지: 롱프레스 핀 좌표 우선, 없으면 검색창 지오코딩
   Future<void> _runNavSearch() async {
     final q = _searchCtrl.text.trim();
-    if (q.isEmpty) {
+    final usePin = _canUsePinnedSearchDest(q);
+
+    if (!usePin && q.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('도착지 주소를 입력하세요')),
       );
       return;
     }
-    if (_myPos == null) {
+    final origin = _pinnedNavOrigin ?? _myPos;
+    if (origin == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('현재 위치를 확인할 수 없습니다. 위치 권한을 확인해 주세요.'),
@@ -965,7 +1166,14 @@ class _MapPageState extends State<MapPage>
 
     _onUserActivity();
     setState(() => _searching = true);
-    final point = await context.read<MapProvider>().searchPlace(q);
+
+    LatLng? point;
+    if (usePin) {
+      point = _pinnedNavDest;
+    } else {
+      point = await context.read<MapProvider>().searchPlace(q);
+    }
+
     if (!mounted) return;
     setState(() => _searching = false);
 
@@ -977,18 +1185,23 @@ class _MapPageState extends State<MapPage>
     }
 
     final nav = context.read<NavProvider>();
+    if (nav.guiding || nav.arrived) {
+      nav.cancelGuidanceForReplan();
+    }
     if (!nav.active) {
-      nav.toggleActive(myPos: _myPos);
+      nav.toggleActive(myPos: origin);
     } else {
-      nav.setOrigin(_myPos);
+      nav.setOrigin(origin);
     }
     nav.setDestination(point);
     await nav.plan();
     if (!mounted) return;
 
-    _onMapUserGesture();
-    _safeMapMove(point, 14);
-    await _loadAround(point, 14);
+    final mid = nav.selected?.points;
+    final focus = (mid != null && mid.isNotEmpty)
+        ? mid[mid.length ~/ 2]
+        : point;
+    await _loadAround(focus, 16);
   }
 
   Future<void> _loadMyReports() async {
@@ -1035,7 +1248,7 @@ class _MapPageState extends State<MapPage>
 
   /// 카드 선택 등에 맞춘 기본 펼침 높이 (탭·드래그 끝 스냅용)
   double _defaultOpenHeight(double screenH, MapProvider map) {
-    const headerH = 52.0;
+    const headerH = _collapsedBarH;
     const textBlockWithDesc = 168.0;
     const textBlockTight = 96.0;
     const cardMargins = 36.0;
@@ -1243,7 +1456,7 @@ class _MapPageState extends State<MapPage>
     final map = context.read<MapProvider>();
     final panelH = _resolvePanelHeight(screenH, map);
     final nav = context.read<NavProvider>();
-    final guideH = nav.guiding ? NavGuidanceBar.preferredHeight : 0.0;
+    final guideH = nav.guiding ? NavGuidanceBar.estimatedHeight : 0.0;
     final freeH = (screenH - panelH - guideH - railH).clamp(120.0, screenH);
 
     final targetYFromTop = freeH * 0.58;
@@ -1396,6 +1609,94 @@ class _MapPageState extends State<MapPage>
     );
   }
 
+  void _onGuidanceStartedFromSheet() {
+    context.read<MapProvider>().setGridsVisible(false);
+    _followZoomOverride = _myLocationZoom;
+    _enableFollowAndCenter(zoom: _myLocationZoom);
+    _tryStartLocationTracking(requestPermission: true);
+  }
+
+  /// 경로선택/안내 + 격자 패널을 빈 틈 없이 한 덩어리로
+  Widget _buildDockedBottomStack({
+    required NavProvider nav,
+    required MapProvider map,
+    required double screenH,
+    required double panelH,
+    required bool panelExpanded,
+  }) {
+    final panelSlice = panelExpanded
+        ? SizedBox(
+            height: panelH,
+            child: _buildBottomPanelBody(
+              map: map,
+              screenH: screenH,
+              nestInParent: true,
+            ),
+          )
+        : _buildBottomPanelBody(
+            map: map,
+            screenH: screenH,
+            nestInParent: true,
+          );
+
+    if (nav.guiding) {
+      return Material(
+        elevation: 10,
+        color: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NavGuidanceBar(nav: nav),
+            const Divider(height: 1, color: Color(0xFFE2E8F0)),
+            panelSlice,
+          ],
+        ),
+      );
+    }
+
+    if (nav.active) {
+      return Material(
+        elevation: 10,
+        color: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NavSheet(
+              myPos: _myPos,
+              embedInParent: true,
+              onGuidanceStarted: _onGuidanceStartedFromSheet,
+              onRoutePreview: _fitSelectedRoute,
+            ),
+            const Divider(height: 1, color: Color(0xFFE2E8F0)),
+            panelSlice,
+          ],
+        ),
+      );
+    }
+
+    if (panelExpanded) {
+      return SizedBox(
+        height: panelH,
+        child: _buildBottomPanelBody(
+          map: map,
+          screenH: screenH,
+          nestInParent: false,
+        ),
+      );
+    }
+    return _buildBottomPanelBody(
+      map: map,
+      screenH: screenH,
+      nestInParent: false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final map = context.watch<MapProvider>();
@@ -1405,11 +1706,16 @@ class _MapPageState extends State<MapPage>
     final screenH = MediaQuery.sizeOf(context).height;
     final railH = 56.0 + bottomPad;
     final panelH = _resolvePanelHeight(screenH, map);
-    final guideH = nav.guiding ? NavGuidanceBar.preferredHeight : 0.0;
-    // FAB: 안내 중엔 합쳐진 패널 바로 위, 경로선택 중엔 살짝만
-    final fabNavGap = nav.guiding
-        ? guideH + 6
-        : (nav.active ? 8.0 : 10.0);
+    final panelExpanded = _panelExpanded || _panelDragging;
+    // FAB: 합쳐진 하단 스택(경로선택/안내+격자) 바로 위
+    final double fabNavGap;
+    if (nav.guiding) {
+      fabNavGap = NavGuidanceBar.estimatedHeight + 6;
+    } else if (nav.active) {
+      fabNavGap = (nav.sheetHeight > 0 ? nav.sheetHeight : 180) + 6;
+    } else {
+      fabNavGap = 10;
+    }
     final fabBottom = railH + panelH + fabNavGap;
 
     return Scaffold(
@@ -1473,6 +1779,10 @@ class _MapPageState extends State<MapPage>
                   if (!isValidLatLng(latLng.latitude, latLng.longitude)) {
                     return;
                   }
+                  if (_longPressPoint != null) {
+                    _dismissLongPressMenu();
+                    return;
+                  }
                   _onUserActivity();
                   _clearFeatureSelection();
                 final mp = context.read<MapProvider>();
@@ -1492,7 +1802,7 @@ class _MapPageState extends State<MapPage>
                 }
               },
               onLongPress: (_, latLng) {
-                unawaited(_fillSearchFromLongPress(latLng));
+                unawaited(_openLongPressMenu(latLng));
               },
             ),
             children: [
@@ -1534,6 +1844,52 @@ class _MapPageState extends State<MapPage>
                   ],
                 ),
               const NavRouteLayer(),
+              const NavOriginMarker(),
+              const NavDestinationMarker(),
+              if (_longPressPoint != null)
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: _longPressPoint!,
+                      width: 36,
+                      height: 44,
+                      alignment: Alignment.topCenter,
+                      child: const Icon(
+                        Icons.location_on,
+                        color: MapUiColors.accent,
+                        size: 36,
+                        shadows: [
+                          Shadow(
+                            color: Colors.black38,
+                            blurRadius: 4,
+                            offset: Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Marker(
+                      point: _longPressPoint!,
+                      width: 280,
+                      height: 128,
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 30),
+                        child: LongPressMapMenu(
+                          address: _longPressAddress,
+                          loading: _longPressAddressLoading,
+                          onOrigin: _onLongPressSetOrigin,
+                          onDestination: () {
+                            unawaited(_onLongPressSetDestination());
+                          },
+                          onCopyAddress: () {
+                            unawaited(_onLongPressCopyAddress());
+                          },
+                          onClose: _dismissLongPressMenu,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               MarkerLayer(
                 markers: [
                     // 제보: 핀 + 선택 시 사진 말풍선
@@ -1634,21 +1990,6 @@ class _MapPageState extends State<MapPage>
             ],
           ),
           ),
-          // 경로 선택 시트 (안내 중에는 하단 패널과 통합)
-          if (nav.active && !nav.guiding)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: railH + panelH,
-              child: NavSheet(
-                myPos: _myPos,
-                onGuidanceStarted: () {
-                  _followZoomOverride = _myLocationZoom;
-                  _enableFollowAndCenter(zoom: _myLocationZoom);
-                  _tryStartLocationTracking(requestPermission: true);
-                },
-              ),
-            ),
           // 상단 바: 내정보 + 검색 + 칩
           SafeArea(
             child: Padding(
@@ -1690,7 +2031,7 @@ class _MapPageState extends State<MapPage>
                                     ),
                                     cursorColor: MapUiColors.accent,
                                     onTap: _onUserActivity,
-                                    onChanged: (_) => _onUserActivity(),
+                                    onChanged: _onSearchTextChanged,
                                     decoration: const InputDecoration(
                                       hintText: '장소 검색 · 길찾기 도착지',
                                       hintStyle: TextStyle(
@@ -1877,44 +2218,24 @@ class _MapPageState extends State<MapPage>
             ),
           ),
 
-          // 하단 패널 (안내 중이면 안내 바와 한 Material)
+          // 하단: 경로선택/안내 + 격자 패널을 한 Material로 (빈 틈 없이)
           Positioned(
             left: 0,
             right: 0,
             bottom: railH,
-            child: AnimatedContainer(
+            child: AnimatedSize(
               duration: _panelDragging
                   ? Duration.zero
                   : const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
-              height: panelH + guideH,
-              child: nav.guiding
-                  ? Material(
-                      elevation: 10,
-                      color: Colors.white,
-                      surfaceTintColor: Colors.transparent,
-                      borderRadius:
-                          const BorderRadius.vertical(top: Radius.circular(14)),
-                      clipBehavior: Clip.antiAlias,
-                      child: Column(
-                        children: [
-                          NavGuidanceBar(nav: nav),
-                          const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                          Expanded(
-                            child: _buildBottomPanelBody(
-                              map: map,
-                              screenH: screenH,
-                              nestInParent: true,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : _buildBottomPanelBody(
-                      map: map,
-                      screenH: screenH,
-                      nestInParent: false,
-                    ),
+              alignment: Alignment.bottomCenter,
+              child: _buildDockedBottomStack(
+                nav: nav,
+                map: map,
+                screenH: screenH,
+                panelH: panelH,
+                panelExpanded: panelExpanded,
+              ),
             ),
           ),
 
@@ -2535,44 +2856,45 @@ class _PanelBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final body = Column(
+      mainAxisSize: expanded ? MainAxisSize.max : MainAxisSize.min,
       children: [
-        // 핸들: 드래그로만 높이 조절 (탭 토글 없음)
+        // 핸들·제목: 고정 높이 없이 내용만큼 (오버플로 방지)
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onVerticalDragUpdate: onDragUpdate,
           onVerticalDragEnd: onDragEnd,
-          child: SizedBox(
-            height: 52,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 5,
-                          margin: const EdgeInsets.only(bottom: 6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF94A3B8),
-                            borderRadius: BorderRadius.circular(3),
-                          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF94A3B8),
+                          borderRadius: BorderRadius.circular(3),
                         ),
-                        Text(
-                          _title,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
-                            color: Color(0xFF0F172A),
-                          ),
+                      ),
+                      Text(
+                        _title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          height: 1.2,
+                          color: Color(0xFF0F172A),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
