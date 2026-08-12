@@ -109,6 +109,28 @@ class RouteCandidate {
     );
   }
 
+  /// 경로 수정(trim) 후 geometry·안내 단계만 갱신
+  RouteCandidate copyWithGeometry({
+    required List<LatLng> points,
+    required double distanceM,
+    double? durationSec,
+    required List<RouteStep> steps,
+  }) {
+    return RouteCandidate(
+      id: id,
+      points: points,
+      distanceM: distanceM,
+      durationSec: durationSec,
+      displayLabel: displayLabel,
+      steps: steps,
+      cctvCount: cctvCount,
+      reportCount: reportCount,
+      accidentCost: accidentCost,
+      cctvPerKm: cctvPerKm,
+      reportPerKm: reportPerKm,
+    );
+  }
+
   /// 선택 카드용: UI id·라벨만 바꾸고 점수·경로·안내는 유지
   RouteCandidate asChoiceCard({
     required String choiceId,
