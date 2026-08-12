@@ -5,7 +5,7 @@ import 'package:latlong2/latlong.dart';
 import '../config/env.dart';
 
 /// 줌아웃 상한(= 허용 최소 zoom). 너무 멀어지면 격자·타일 과다.
-const double kMapMinZoom = 9;
+const double kMapMinZoom = 15;
 
 /// 줌인 상한
 const double kMapMaxZoom = 19;

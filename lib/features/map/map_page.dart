@@ -17,6 +17,7 @@ import '../../core/format/event_text.dart';
 import '../../core/geo/geo_utils.dart';
 import '../../core/geo/region_code.dart';
 import '../../core/network/api_exception.dart';
+import '../../core/network/user_error.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/models.dart';
 import '../../data/repositories/mypage_repository.dart';
@@ -1300,13 +1301,13 @@ class _MapPageState extends State<MapPage>
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
-        _myError = e.message;
+        _myError = userFacingError(e);
         _myLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _myError = e.toString();
+        _myError = userFacingError(e);
         _myLoading = false;
       });
     }
@@ -1725,7 +1726,7 @@ class _MapPageState extends State<MapPage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            NavGuidanceBar(nav: nav),
+            NavGuidanceBar(nav: nav, myPos: _myPos),
             const Divider(height: 1, color: Color(0xFFE2E8F0)),
             panelSlice,
           ],
