@@ -10,6 +10,7 @@ import '../data/repositories/direction_repository.dart';
 import '../data/repositories/map_repository.dart';
 import '../services/guidance_progress.dart';
 import '../services/route_scorer.dart';
+import '../services/route_trim.dart';
 import '../services/via_candidate_picker.dart';
 
 class NavProvider extends ChangeNotifier {
@@ -140,7 +141,10 @@ class NavProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 경로 수정: 안내는 끄고 도착지 유지 → 현재 위치 기준으로 경로 카드 다시 찾기
+  /// 경로 이탈 시 TMAP 재탐색, 경로 위면 trim만 (TMAP 0회).
+  static const double _editRouteMaxOffRouteM = 50;
+
+  /// 경로 수정: 안내는 끄고 도착지 유지 → 현재 위치 기준으로 경로 조정 또는 재탐색
   Future<void> editRoute({LatLng? from}) async {
     if (from != null) origin = from;
     if (origin == null || destination == null) {
@@ -149,8 +153,76 @@ class NavProvider extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    // cancelGuidanceForReplan 은 plan() 초입에 호출됨
+
+    final me = from ?? origin!;
+    final savedSelected = selected;
+    final savedLabel = savedSelected?.displayLabel;
+    final savedCandidates = List<RouteCandidate>.from(candidates);
+
+    if (savedSelected != null &&
+        savedCandidates.isNotEmpty &&
+        trimRouteFromPosition(
+              savedSelected,
+              me,
+              maxOffRouteM: _editRouteMaxOffRouteM,
+            ) !=
+            null) {
+      final trimmed = <RouteCandidate>[];
+      for (final c in savedCandidates) {
+        final t = trimRouteFromPosition(
+          c,
+          me,
+          maxOffRouteM: _editRouteMaxOffRouteM,
+        );
+        if (t != null) trimmed.add(t);
+      }
+      if (trimmed.isNotEmpty) {
+        await _applyTrimmedRoutes(
+          trimmed,
+          priorLabel: savedLabel,
+          notice: '현재 위치 기준으로 경로를 조정했습니다.',
+        );
+        return;
+      }
+    }
+
     await plan();
+  }
+
+  Future<void> _applyTrimmedRoutes(
+    List<RouteCandidate> trimmed, {
+    String? priorLabel,
+    String? notice,
+  }) async {
+    cancelGuidanceForReplan();
+    loading = true;
+    error = null;
+    message = notice;
+    notifyListeners();
+
+    try {
+      candidates = trimmed;
+      await _buildChoices();
+      if (priorLabel != null) {
+        final match = choiceCards
+            .where((c) => c.displayLabel == priorLabel)
+            .firstOrNull;
+        if (match != null) {
+          selected = match;
+          if (shortest != null) {
+            compare = vsShortest(match, shortest!);
+          }
+        }
+      }
+    } catch (e) {
+      error = userFacingError(e, fallback: '경로를 찾지 못했습니다.');
+      candidates = const [];
+      choiceCards = const [];
+      selected = null;
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
   }
 
   void _resetGuidanceFields() {
