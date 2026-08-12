@@ -3,6 +3,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../core/geo/geo_utils.dart';
 import '../core/network/api_exception.dart';
+import '../core/network/user_error.dart';
 import '../data/models/models.dart';
 import '../data/models/route_models.dart';
 import '../data/repositories/direction_repository.dart';
@@ -137,6 +138,19 @@ class NavProvider extends ChangeNotifier {
     message = null;
     error = null;
     notifyListeners();
+  }
+
+  /// 경로 수정: 안내는 끄고 도착지 유지 → 현재 위치 기준으로 경로 카드 다시 찾기
+  Future<void> editRoute({LatLng? from}) async {
+    if (from != null) origin = from;
+    if (origin == null || destination == null) {
+      cancelGuidanceForReplan();
+      error = '출발/도착이 없습니다. 길찾기를 다시 해 주세요.';
+      notifyListeners();
+      return;
+    }
+    // cancelGuidanceForReplan 은 plan() 초입에 호출됨
+    await plan();
   }
 
   void _resetGuidanceFields() {
@@ -274,12 +288,12 @@ class NavProvider extends ChangeNotifier {
       candidates = raw;
       await _buildChoices();
     } on ApiException catch (e) {
-      error = e.message;
+      error = userFacingError(e, fallback: '경로를 찾지 못했습니다.');
       candidates = const [];
       choiceCards = const [];
       selected = null;
     } catch (e) {
-      error = e.toString();
+      error = userFacingError(e, fallback: '경로를 찾지 못했습니다.');
       candidates = const [];
       choiceCards = const [];
       selected = null;

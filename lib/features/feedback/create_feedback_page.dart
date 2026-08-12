@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/network/api_exception.dart';
+import '../../core/network/user_error.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/models.dart';
 import '../../data/repositories/feedback_repository.dart';
@@ -112,11 +113,13 @@ class _CreateFeedbackPageState extends State<CreateFeedbackPage> {
       if (!mounted) return;
       final msg = e.statusCode == 409
           ? '이 격자에 이미 피드백을 작성했습니다'
-          : e.message;
+          : userFacingError(e);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(userFacingError(e))),
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }

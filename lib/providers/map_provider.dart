@@ -8,6 +8,7 @@ import '../core/config/env.dart';
 import '../core/geo/geo_utils.dart';
 import '../core/geo/region_code.dart';
 import '../core/network/api_exception.dart';
+import '../core/network/user_error.dart';
 import '../data/models/models.dart';
 import '../data/repositories/map_repository.dart';
 import '../services/nearby_report_alert.dart';
@@ -256,9 +257,9 @@ class MapProvider extends ChangeNotifier {
       if (infraVisible) await refreshInfra(silent: true);
       if (accidentZonesVisible) scheduleAccidentZonesRefresh();
     } on ApiException catch (e) {
-      error = e.message;
+      error = userFacingError(e);
     } catch (e) {
-      error = e.toString();
+      error = userFacingError(e);
     } finally {
       loading = false;
       notifyListeners();
@@ -276,9 +277,9 @@ class MapProvider extends ChangeNotifier {
       infrastructures =
           list.where((i) => isValidLatLng(i.lat, i.lng)).toList();
     } on ApiException catch (e) {
-      if (!silent) error = e.message;
+      if (!silent) error = userFacingError(e);
     } catch (e) {
-      if (!silent) error = e.toString();
+      if (!silent) error = userFacingError(e);
     }
     if (!silent) notifyListeners();
   }
@@ -342,9 +343,9 @@ class MapProvider extends ChangeNotifier {
       accidentZones = sanitized;
       _lastAccidentRegionKey = regionKey;
     } on ApiException catch (e) {
-      if (!silent) error = e.message;
+      if (!silent) error = userFacingError(e);
     } catch (e) {
-      if (!silent) error = e.toString();
+      if (!silent) error = userFacingError(e);
     }
     if (!silent) notifyListeners();
   }
@@ -371,7 +372,7 @@ class MapProvider extends ChangeNotifier {
           infras.where((i) => isValidLatLng(i.lat, i.lng)).toList();
       notifyListeners();
     } on ApiException catch (e) {
-      error = e.message;
+      error = userFacingError(e);
       notifyListeners();
     }
   }
@@ -410,7 +411,7 @@ class MapProvider extends ChangeNotifier {
       final lon = double.tryParse('${first['lon']}');
       return tryLatLng(lat, lon);
     } catch (e) {
-      error = '검색 실패: $e';
+      error = userFacingError(e, fallback: '검색에 실패했습니다.');
       notifyListeners();
       return null;
     }

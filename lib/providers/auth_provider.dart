@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/network/api_client.dart';
 import '../core/network/api_exception.dart';
+import '../core/network/user_error.dart';
 import '../data/models/models.dart';
 import '../data/repositories/auth_repository.dart';
 
@@ -56,10 +57,10 @@ class AuthProvider extends ChangeNotifier {
       );
       return true;
     } on ApiException catch (e) {
-      error = e.message;
+      error = userFacingError(e, fallback: '로그인에 실패했습니다.');
       return false;
     } catch (e) {
-      error = e.toString();
+      error = userFacingError(e, fallback: '로그인에 실패했습니다.');
       return false;
     } finally {
       loading = false;
@@ -83,10 +84,10 @@ class AuthProvider extends ChangeNotifier {
       );
       return true;
     } on ApiException catch (e) {
-      error = e.message;
+      error = userFacingError(e, fallback: '회원가입에 실패했습니다.');
       return false;
     } catch (e) {
-      error = e.toString();
+      error = userFacingError(e, fallback: '회원가입에 실패했습니다.');
       return false;
     } finally {
       loading = false;
