@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -315,9 +317,15 @@ class _NavSheetState extends State<NavSheet> {
 
 /// 안내 바 본문 (하단 패널과 한 덩어리로 쓸 때 Material 없음)
 class NavGuidanceBar extends StatelessWidget {
-  const NavGuidanceBar({super.key, required this.nav});
+  const NavGuidanceBar({
+    super.key,
+    required this.nav,
+    this.myPos,
+  });
 
   final NavProvider nav;
+  /// 경로 수정 시 새 출발지 (현재 GPS)
+  final LatLng? myPos;
 
   /// FAB 위치 추정치 (실제 위젯은 intrinsic)
   static const double estimatedHeight = 72;
@@ -389,34 +397,70 @@ class NavGuidanceBar extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          Material(
-            color: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: const BorderSide(
-                color: MapUiColors.accent,
-                width: 1.2,
+          const SizedBox(width: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _GuidanceActionChip(
+                label: '경로 수정',
+                onTap: nav.loading
+                    ? null
+                    : () {
+                        unawaited(
+                          context.read<NavProvider>().editRoute(from: myPos),
+                        );
+                      },
               ),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => context.read<NavProvider>().stopGuidance(),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Text(
-                  '안내 종료',
-                  style: TextStyle(
-                    color: MapUiColors.accent,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12.5,
-                    height: 1.2,
-                  ),
-                ),
+              const SizedBox(width: 6),
+              _GuidanceActionChip(
+                label: '안내 종료',
+                onTap: () => context.read<NavProvider>().stopGuidance(),
               ),
-            ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _GuidanceActionChip extends StatelessWidget {
+  const _GuidanceActionChip({
+    required this.label,
+    required this.onTap,
+  });
+
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(
+          color: enabled ? MapUiColors.accent : const Color(0xFF94A3B8),
+          width: 1.2,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: enabled ? MapUiColors.accent : const Color(0xFF94A3B8),
+              fontWeight: FontWeight.w700,
+              fontSize: 12.5,
+              height: 1.2,
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -179,7 +179,7 @@ class ApiClient {
     final body = res.data;
     if (body is! Map) {
       throw ApiException(
-        '이미지 업로드 응답 오류 (${res.statusCode}): $body',
+        '이미지 업로드에 실패했습니다.',
         statusCode: res.statusCode,
       );
     }
@@ -193,7 +193,7 @@ class ApiClient {
     }
     final data = map['data'];
     if (data is Map) return Map<String, dynamic>.from(data);
-    throw ApiException('이미지 업로드 data 형식 오류: $data');
+    throw ApiException('이미지 업로드에 실패했습니다.');
   }
 
   T _parse<T>(
@@ -214,7 +214,7 @@ class ApiClient {
     if (success == false ||
         (res.statusCode != null && res.statusCode! >= 400)) {
       throw ApiException(
-        (body['message'] as String?) ?? '요청 실패 (${res.statusCode})',
+        (body['message'] as String?) ?? '요청에 실패했습니다.',
         statusCode: res.statusCode,
       );
     }

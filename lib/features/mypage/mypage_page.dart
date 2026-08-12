@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/config/media_url.dart';
 import '../../core/network/api_exception.dart';
+import '../../core/network/user_error.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/models.dart';
 import '../../data/repositories/auth_repository.dart';
@@ -73,13 +74,13 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
-        error = e.message;
+        error = userFacingError(e);
         loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        error = e.toString();
+        error = userFacingError(e);
         loading = false;
       });
     }
@@ -163,7 +164,7 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      ).showSnackBar(SnackBar(content: Text(userFacingError(e))));
     }
   }
 
@@ -414,10 +415,12 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      ).showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(userFacingError(e))),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -458,10 +461,12 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      ).showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(userFacingError(e))),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -730,10 +735,12 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      ).showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(userFacingError(e))),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -774,10 +781,12 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      ).showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(userFacingError(e))),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -907,7 +916,6 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                   );
                 }).toList(),
               ),
-            const SizedBox(height: 12),
             const SizedBox(height: 12),
             _ImageEditBlock(
               remoteUrl: _clearImage ? null : _currentImgUrl,

@@ -42,7 +42,7 @@ class DirectionRepository {
     }
 
     final merged = <RouteCandidate>[];
-    Object? lastError;
+    String? lastError;
     int? lastStatus;
 
     Future<void> addFrom(Future<List<RouteCandidate>> Function() call) async {
@@ -53,14 +53,9 @@ class DirectionRepository {
         }
       } on DioException catch (e) {
         lastStatus = e.response?.statusCode;
-        final data = e.response?.data;
-        if (data is Map) {
-          lastError = data['error'] ?? data['message'] ?? data['msg'];
-        } else {
-          lastError = e.message;
-        }
-      } catch (e) {
-        lastError = e;
+        lastError = _tmapUserMessage(e.response?.data);
+      } catch (_) {
+        lastError = '경로를 찾지 못했습니다.';
       }
     }
 
@@ -92,11 +87,9 @@ class DirectionRepository {
         ),
       );
     }
-
     if (merged.isEmpty) {
       throw ApiException(
-        lastError?.toString() ??
-            '길찾기 요청 실패${lastStatus != null ? ' ($lastStatus)' : ''}',
+        lastError ?? '경로를 찾지 못했습니다.',
         statusCode: lastStatus,
       );
     }
@@ -309,5 +302,22 @@ class DirectionRepository {
           1000;
     }
     return m;
+  }
+  String _tmapUserMessage(dynamic data) {
+    if (data is! Map) return '경로를 찾지 못했습니다.';
+
+    final nested = data['error'];
+    final source = nested is Map ? nested : data;
+    final code = source['code']?.toString();
+
+    switch (code) {
+      case '3102':
+      case '3002':
+        return '보행 길찾기를 지원하지 않는 구간입니다.';
+      case '1009':
+        return '출발/도착 위치를 다시 선택해 주세요.';
+      default:
+        return '경로를 찾지 못했습니다.';
+    }
   }
 }
