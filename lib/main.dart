@@ -23,6 +23,7 @@ import 'providers/auth_provider.dart';
 import 'providers/map_provider.dart';
 import 'services/nearby_monitor.dart';
 import 'services/nearby_report_alert.dart';
+import 'services/guidance_notification.dart';
 //nav
 import 'data/repositories/direction_repository.dart';
 import 'providers/nav_provider.dart';
@@ -41,8 +42,9 @@ Future<void> main() async {
   final feedbackRepo = FeedbackRepository(api);
   final mypageRepo = MyPageRepository(api);
 
+  final guidanceNotif = GuidanceNotification();
   final nearbyAlert = NearbyReportAlert(mapRepo);
-  await nearbyAlert.init();
+  await nearbyAlert.init(guidance: guidanceNotif);
 
   final nearbyMonitor = NearbyMonitor(nearbyAlert);
   await nearbyMonitor.hydrate();
@@ -51,6 +53,13 @@ Future<void> main() async {
 
   final auth = AuthProvider(api, authRepo);
   await auth.hydrate();
+
+  final navProvider = NavProvider(directionRepo, mapRepo);
+  guidanceNotif.onStopRequested = () {
+    if (navProvider.guiding) {
+      navProvider.stopGuidance();
+    }
+  };
 
   runApp(
     MultiProvider(
@@ -62,13 +71,11 @@ Future<void> main() async {
         Provider.value(value: feedbackRepo),
         Provider.value(value: mypageRepo),
         Provider.value(value: nearbyAlert),
+        Provider.value(value: guidanceNotif),
         ChangeNotifierProvider.value(value: nearbyMonitor),
         ChangeNotifierProvider.value(value: auth),
         ChangeNotifierProvider.value(value: mapProvider),
-        //nav
-        ChangeNotifierProvider(
-          create: (_) => NavProvider(directionRepo, mapRepo),
-),
+        ChangeNotifierProvider.value(value: navProvider),
       ],
       child: SafetyMapApp(auth: auth, nearbyAlert: nearbyAlert),
     ),

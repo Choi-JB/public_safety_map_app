@@ -9,6 +9,7 @@ import '../core/geo/geo_utils.dart';
 import '../core/geo/region_code.dart';
 import '../data/models/models.dart';
 import '../data/repositories/map_repository.dart';
+import 'guidance_notification.dart';
 
 const _accidentTypeLabel = {
   'pedestrian': '보행자',
@@ -41,6 +42,10 @@ class NearbyReportAlert {
   final MapRepository _repo;
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
+
+  FlutterLocalNotificationsPlugin get notificationsPlugin => _plugin;
+
+  GuidanceNotification? guidanceNotification;
 
   SharedPreferences? _prefs;
 
@@ -77,7 +82,8 @@ class NearbyReportAlert {
   bool _checking = false;
   DateTime? _lastCheck;
 
-  Future<void> init() async {
+  Future<void> init({GuidanceNotification? guidance}) async {
+    guidanceNotification = guidance;
     _prefs = await SharedPreferences.getInstance();
     final saved = _prefs?.getStringList(_prefsNotifiedKey) ?? const [];
     for (final s in saved) {
@@ -118,13 +124,23 @@ class NearbyReportAlert {
     );
     await androidImpl?.requestNotificationsPermission();
 
+    if (guidance != null) {
+      await guidance.attach(_plugin);
+    }
+
     final iosImpl = _plugin.resolvePlatformSpecificImplementation<
         IOSFlutterLocalNotificationsPlugin>();
     await iosImpl?.requestPermissions(alert: true, badge: true, sound: true);
 
     final launch = await _plugin.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp == true) {
-      _handlePayload(launch!.notificationResponse?.payload);
+      final resp = launch!.notificationResponse;
+      if (resp != null &&
+          guidanceNotification?.handleResponse(resp) == true) {
+        // 안내 종료 액션으로 기동
+      } else {
+        _handlePayload(resp?.payload);
+      }
     }
 
     _ready = true;
@@ -215,6 +231,7 @@ class NearbyReportAlert {
   }
 
   void _onNotificationResponse(NotificationResponse response) {
+    if (guidanceNotification?.handleResponse(response) == true) return;
     _handlePayload(response.payload);
   }
 
