@@ -5,19 +5,23 @@ import '../../core/config/env.dart';
 import '../../core/geo/geo_utils.dart';
 import '../../core/network/api_exception.dart';
 import '../models/route_models.dart';
+import '../../services/tmap_route_cache.dart';
 
 /// TMAP 보행자 경로 (SK open API). BE 프록시 없음 · 앱 직접 호출.
 /// 직행 + (선택) 경유 후보로 대안 경로를 만든다.
 class DirectionRepository {
-  DirectionRepository({Dio? dio}) : _dio = dio ?? Dio();
+  DirectionRepository({Dio? dio, TmapRouteCache? cache})
+      : _dio = dio ?? Dio(),
+        _cache = cache ?? TmapRouteCache.instance;
 
   final Dio _dio;
+  final TmapRouteCache _cache;
 
   static const _pedestrianUrl =
       'https://apis.openapi.sk.com/tmap/routes/pedestrian';
 
-  /// 직행 후보: 추천(0) · 최단거리(10)
-  static const _directOptions = ['0', '10'];
+  /// 직행 후보: 최단거리(10) 먼저 · 실패 시 추천·경유 요청 생략 · 성공 시 추천(0)
+  static const _directOptions = ['10', '0'];
 
   static String labelForSearchOption(String opt) => switch (opt) {
         '0' => '추천',
@@ -45,46 +49,97 @@ class DirectionRepository {
     String? lastError;
     int? lastStatus;
 
-    Future<void> addFrom(Future<List<RouteCandidate>> Function() call) async {
+    Future<void> addPedestrian({
+      required String searchOption,
+      required String idSuffix,
+      required String displayLabel,
+      List<LatLng> waypoints = const [],
+    }) async {
+      final cacheKey = _cache.makeKey(
+        startLat: origin.latitude,
+        startLng: origin.longitude,
+        endLat: destination.latitude,
+        endLng: destination.longitude,
+        searchOption: searchOption,
+        waypointKeys: [
+          for (final w in waypoints)
+            TmapRouteCache.waypointKey(w.latitude, w.longitude),
+        ],
+      );
+
+      final hit = _cache.lookup(cacheKey);
+      if (hit != null) {
+        if (hit.error != null) {
+          lastError = hit.error;
+          return;
+        }
+        final route = hit.route;
+        if (route != null && !isDuplicate(merged, route)) {
+          merged.add(route);
+        }
+        return;
+      }
+
       try {
-        final list = await call();
+        final list = await _fetchPedestrian(
+          origin: origin,
+          destination: destination,
+          appKey: key,
+          searchOption: searchOption,
+          idSuffix: idSuffix,
+          displayLabel: displayLabel,
+          waypoints: waypoints,
+        );
+        if (list.isEmpty) {
+          lastError ??= '경로를 찾지 못했습니다.';
+          _cache.putFailure(
+            cacheKey,
+            lastError ?? '경로를 찾지 못했습니다.',
+            negative: false,
+          );
+          return;
+        }
         for (final c in list) {
           if (!isDuplicate(merged, c)) merged.add(c);
+          _cache.putSuccess(cacheKey, c);
         }
       } on DioException catch (e) {
         lastStatus = e.response?.statusCode;
         lastError = _tmapUserMessage(e.response?.data);
+        _cache.putFailure(
+          cacheKey,
+          lastError!,
+          negative: _isFatalTmapCode(e.response?.data),
+        );
       } catch (_) {
         lastError = '경로를 찾지 못했습니다.';
       }
     }
 
-    for (final opt in _directOptions) {
-      await addFrom(
-        () => _fetchPedestrian(
-          origin: origin,
-          destination: destination,
-          appKey: key,
-          searchOption: opt,
-          idSuffix: 'direct_$opt',
-          displayLabel: labelForSearchOption(opt),
-        ),
+    for (var i = 0; i < _directOptions.length; i++) {
+      final opt = _directOptions[i];
+      await addPedestrian(
+        searchOption: opt,
+        idSuffix: 'direct_$opt',
+        displayLabel: labelForSearchOption(opt),
       );
+      // 최단거리(10) 실패 시 추천·경유 TMAP 호출 생략 (일일 한도 절약)
+      if (i == 0 && merged.isEmpty) {
+        throw ApiException(
+          lastError ?? '경로를 찾지 못했습니다.',
+          statusCode: lastStatus,
+        );
+      }
     }
 
     for (var i = 0; i < viaPoints.length; i++) {
       final via = viaPoints[i];
       if (!isValidLatLng(via.latitude, via.longitude)) continue;
-      await addFrom(
-        () => _fetchPedestrian(
-          origin: origin,
-          destination: destination,
-          appKey: key,
-          searchOption: '0',
-          waypoints: [via],
-          idSuffix: 'via_$i',
-          displayLabel: '대안 ${i + 1}',
-        ),
+      await addPedestrian(
+        searchOption: '0',
+        idSuffix: 'via_$i',
+        displayLabel: '대안 ${i + 1}',
+        waypoints: [via],
       );
     }
     if (merged.isEmpty) {
@@ -319,5 +374,13 @@ class DirectionRepository {
       default:
         return '경로를 찾지 못했습니다.';
     }
+  }
+
+  bool _isFatalTmapCode(dynamic data) {
+    if (data is! Map) return false;
+    final nested = data['error'];
+    final source = nested is Map ? nested : data;
+    final code = source['code']?.toString();
+    return code == '3102' || code == '3002' || code == '1009';
   }
 }
