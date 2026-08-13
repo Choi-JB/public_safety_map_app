@@ -50,7 +50,7 @@ RouteCandidate? trimRouteFromPosition(
   final traveled = distanceTraveledAlongRoute(points, me);
   if (traveled >= route.distanceM - 5) return null;
 
-  final newPoints = _trimPolyline(points, traveled);
+  final newPoints = remainingPolylinePoints(points, traveled);
   if (newPoints.length < 2) return null;
 
   final newDistanceM = _polylineLengthM(newPoints);
@@ -80,7 +80,8 @@ RouteCandidate? trimRouteFromPosition(
   );
 }
 
-List<LatLng> _trimPolyline(List<LatLng> points, double traveledM) {
+/// 지나온 traveledM 만큼 앞구간을 잘라 남은 폴리라인 반환
+List<LatLng> remainingPolylinePoints(List<LatLng> points, double traveledM) {
   final out = <LatLng>[];
   var along = 0.0;
 
