@@ -165,6 +165,7 @@ class _MapPageState extends State<MapPage>
   bool _wasGuiding = false;
   bool _wasArrived = false;
   NavProvider? _navListened;
+  MapProvider? _mapListened;
 
   @override
   void initState() {
@@ -198,6 +199,12 @@ class _MapPageState extends State<MapPage>
       _wasArrived = nav.arrived;
       nav.addListener(_onNavProviderChanged);
     }
+    final map = context.read<MapProvider>();
+    if (!identical(_mapListened, map)) {
+      _mapListened?.removeListener(_onMapProviderChanged);
+      _mapListened = map;
+      map.addListener(_onMapProviderChanged);
+    }
   }
 
   @override
@@ -215,10 +222,24 @@ class _MapPageState extends State<MapPage>
     if (!mounted) return;
     if (_isMapRouteActive) {
       _onMapScreenVisibilityMaybeResumed();
+      unawaited(_consumePendingFocus());
     } else {
       // 다른 화면: idle 정지 (6-A)
       _idleFollowTimer?.cancel();
     }
+  }
+
+  void _onMapProviderChanged() {
+    if (!mounted || !_booted || !_isMapRouteActive) return;
+    if (_mapListened?.pendingFocus == null) return;
+    unawaited(_consumePendingFocus());
+  }
+
+  Future<void> _consumePendingFocus() async {
+    if (!mounted || !_booted) return;
+    final focus = context.read<MapProvider>().takePendingFocus();
+    if (focus == null) return;
+    await _applyMapFocus(focus);
   }
 
   void _onMapScreenVisibilityMaybeResumed() {
@@ -532,7 +553,20 @@ class _MapPageState extends State<MapPage>
   }
 
   Future<void> _boot() async {
-    await _initialLoad();
+    final map = context.read<MapProvider>();
+    final focus = widget.focus ?? map.takePendingFocus();
+    final focusPoint =
+        focus != null ? tryLatLng(focus.lat, focus.lng) : null;
+
+    // 마이페이지 등에서 특정 위치로 올 때 GPS 따라가기가 카메라를 가로채지 않게
+    if (focus != null) {
+      _onMapUserGesture();
+    }
+
+    await _initialLoad(
+      cameraCenter: focusPoint,
+      cameraZoom: focusPoint != null ? 16.0 : null,
+    );
     if (!mounted) return;
 
     final alert = context.read<NearbyReportAlert>();
@@ -556,36 +590,63 @@ class _MapPageState extends State<MapPage>
       await _openAccidentZone(pendingAcc);
     }
 
-    // 마이페이지 → 제보/피드백 위치
-    final focus = widget.focus;
     if (focus != null) {
-      final p = tryLatLng(focus.lat, focus.lng);
-      if (p != null) {
-        _focusMapOn(p, zoom: 16);
+      await _applyMapFocus(focus, alreadyLoadedAt: focusPoint);
+    }
+
+    // go('/map')로 복귀했는데 _boot가 이미 끝난 인스턴스면 위에서 소비.
+    // 재생성 직후 request가 늦게 도착한 경우 대비
+    await _consumePendingFocus();
+  }
+
+  /// 마이페이지·알림 외 경로에서 전달된 지도 포커스 적용
+  Future<void> _applyMapFocus(
+    MapFocusTarget focus, {
+    LatLng? alreadyLoadedAt,
+  }) async {
+    if (!mounted) return;
+    _onMapUserGesture();
+
+    final alert = context.read<NearbyReportAlert>();
+    final p = tryLatLng(focus.lat, focus.lng);
+    if (p != null) {
+      _focusMapOn(p, zoom: 16);
+      final same = alreadyLoadedAt != null &&
+          (alreadyLoadedAt.latitude - p.latitude).abs() < 1e-9 &&
+          (alreadyLoadedAt.longitude - p.longitude).abs() < 1e-9;
+      if (!same) {
         await _loadAround(p, 16);
       }
+    }
 
-      final reportId = focus.reportId;
-      if (reportId != null && mounted) {
-        final map = context.read<MapProvider>();
-        for (final item in map.reports) {
-          if (item.id == reportId) {
-            _selectReport(item, moveMap: true);
-            break;
-          }
+    final reportId = focus.reportId;
+    if (reportId != null && mounted) {
+      final map = context.read<MapProvider>();
+      ReportItem? found;
+      for (final item in map.reports) {
+        if (item.id == reportId) {
+          found = item;
+          break;
         }
       }
+      found ??= alert.cachedReport(reportId);
+      if (found != null) {
+        _selectReport(found, moveMap: true);
+      } else if (p != null) {
+        _focusMapOn(p, zoom: 16);
+      }
+    }
 
-      final gridId = focus.gridId;
-      if (gridId != null && mounted) {
-        await _onGridTap(gridId);
-        if (!mounted) return;
-        final detail = context.read<MapProvider>().selectedGridDetail;
-        final gp = tryLatLng(detail?.lat, detail?.lng);
-        if (gp != null) {
-          _focusMapOn(gp, zoom: 16);
-          await _loadAround(gp, 16);
-        }
+    final gridId = focus.gridId;
+    if (gridId != null && mounted) {
+      await _onGridTap(gridId);
+      if (!mounted) return;
+      final detail = context.read<MapProvider>().selectedGridDetail;
+      final gp = tryLatLng(detail?.lat, detail?.lng);
+      if (gp != null) {
+        _onMapUserGesture();
+        _focusMapOn(gp, zoom: 16);
+        await _loadAround(gp, 16);
       }
     }
   }
@@ -660,6 +721,8 @@ class _MapPageState extends State<MapPage>
     _idleFollowTimer?.cancel();
     _navListened?.removeListener(_onNavProviderChanged);
     _navListened = null;
+    _mapListened?.removeListener(_onMapProviderChanged);
+    _mapListened = null;
     _openReportSub?.cancel();
     _openAccidentSub?.cancel();
     _posSub?.cancel();
@@ -875,16 +938,21 @@ class _MapPageState extends State<MapPage>
     );
   }
 
-  Future<void> _initialLoad() async {
+  Future<void> _initialLoad({
+    LatLng? cameraCenter,
+    double? cameraZoom,
+  }) async {
     if (_booted) return;
     _booted = true;
 
     // 기본값: 서울 → 가능하면 GPS로 교체
-    var c = coerceLatLng(
-      context.read<MapProvider>().center.latitude,
-      context.read<MapProvider>().center.longitude,
-    );
-    var z = 14.0;
+    // cameraCenter가 있으면(마이페이지 포커스) 카메라는 그쪽으로, GPS는 내 위치 마커만
+    var c = cameraCenter ??
+        coerceLatLng(
+          context.read<MapProvider>().center.latitude,
+          context.read<MapProvider>().center.longitude,
+        );
+    var z = cameraZoom ?? (cameraCenter != null ? 16.0 : 14.0);
 
     final hasLocation =
         await _ensureLocationPermission(request: true);
@@ -898,8 +966,10 @@ class _MapPageState extends State<MapPage>
         );
         final p = tryLatLng(pos.latitude, pos.longitude);
         if (p != null) {
-          c = p;
-          z = _myLocationZoom;
+          if (cameraCenter == null) {
+            c = p;
+            z = _myLocationZoom;
+          }
           if (mounted) {
             _snapMyLocation(
               p,

@@ -461,6 +461,40 @@ class MapProvider extends ChangeNotifier {
     );
   }
 
+  /// 마이페이지 등 → 기존 지도로 복귀할 때 적용할 포커스
+  MapFocusTarget? _pendingFocus;
+
+  /// 지도 이동 후 마이페이지 재진입 시 상세 시트 복원
+  int? _pendingReopenReportId;
+  int? _pendingReopenFeedbackId;
+
+  MapFocusTarget? get pendingFocus => _pendingFocus;
+
+  void requestMapFocus(MapFocusTarget target) {
+    _pendingFocus = target;
+    notifyListeners();
+  }
+
+  MapFocusTarget? takePendingFocus() {
+    final t = _pendingFocus;
+    _pendingFocus = null;
+    return t;
+  }
+
+  void setPendingMypageReopen({int? reportId, int? feedbackId}) {
+    _pendingReopenReportId = reportId;
+    _pendingReopenFeedbackId = feedbackId;
+  }
+
+  ({int? reportId, int? feedbackId})? takePendingMypageReopen() {
+    final reportId = _pendingReopenReportId;
+    final feedbackId = _pendingReopenFeedbackId;
+    if (reportId == null && feedbackId == null) return null;
+    _pendingReopenReportId = null;
+    _pendingReopenFeedbackId = null;
+    return (reportId: reportId, feedbackId: feedbackId);
+  }
+
   int _radiusForZoom(double z) {
     final safe = safeZoom(z);
     if (safe >= 17) return 280;
