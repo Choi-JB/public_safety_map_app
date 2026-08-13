@@ -272,12 +272,75 @@ class NavProvider extends ChangeNotifier {
     notifyListeners();
     Future(() async {
       try {
-        await editRoute(from: me);
+        await _replanWhileGuiding(me);  // ← editRoute 대신
       } finally {
         _autoReplanQueued = false;
       }
     });
   }
+    /// 안내 중 이탈: 경로만 갈아끼움. guiding 유지. cancelGuidance / plan 금지.
+  Future<void> _replanWhileGuiding(LatLng me) async {
+    final d = destination;
+    if (d == null || !guiding) return;
+
+    origin = me;
+    loading = true;
+    error = null;
+    notifyListeners();
+
+    final priorLabel = selected?.displayLabel;
+
+    try {
+      // 이탈 보정은 경유 없이 직행 (쿼터 절약). plan()과 다름.
+      final raw = await _directions.fetch(
+        origin: me,
+        destination: d,
+        mode: NavMode.walk,
+        viaPoints: const [],
+      );
+      if (raw.isEmpty) {
+        message = '경로를 다시 찾지 못했습니다. 기존 안내를 유지합니다.';
+        return;
+      }
+
+      candidates = raw;
+      await _buildChoices();
+
+      // 이전 카드 라벨이 있으면 우선, 없으면 첫 카드(최단거리)
+      RouteCandidate? next = choiceCards.isNotEmpty ? choiceCards.first : null;
+      if (priorLabel != null) {
+        final match = choiceCards
+            .where((c) => c.displayLabel == priorLabel)
+            .firstOrNull;
+        if (match != null) next = match;
+      }
+      if (next == null) {
+        message = '경로를 다시 찾지 못했습니다. 기존 안내를 유지합니다.';
+        return;
+      }
+
+      selected = next;
+      if (shortest != null) {
+        compare = vsShortest(next, shortest!);
+      }
+
+      //cancelGuidanceForReplan / startGuidance / guiding=false 금지
+      guiding = true;
+      arrived = false;
+      message = '경로를 다시 잡았습니다.';
+      sheetHeight = _guideSheetEstimate;
+      updateGuideProgress(me);
+    } on ApiException catch (e) {
+      message = userFacingError(e, fallback: '경로 재탐색에 실패했습니다.');
+      // 기존 selected / guiding 유지
+    } catch (e) {
+      message = userFacingError(e, fallback: '경로 재탐색에 실패했습니다.');
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+  
 
   void updateGuideProgress(LatLng me) {
     if (!guiding) return;
