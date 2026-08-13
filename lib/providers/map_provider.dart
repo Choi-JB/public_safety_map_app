@@ -461,8 +461,13 @@ class MapProvider extends ChangeNotifier {
     );
   }
 
-  /// 마이페이지 등 → 기존 지도로 복귀할 때 적용할 포커스
+  /// 마이페이지 「위치로 이동」 등 → 기존 지도로 복귀할 때 적용할 포커스
   MapFocusTarget? _pendingFocus;
+
+  /// 마이페이지 위치 이동 중 (GPS follow / 스피너 가드)
+  bool mapFocusing = false;
+  Timer? _mapFocusingTimeout;
+  static const _mapFocusingMaxDuration = Duration(seconds: 5);
 
   /// 지도 이동 후 마이페이지 재진입 시 상세 시트 복원
   int? _pendingReopenReportId;
@@ -472,6 +477,9 @@ class MapProvider extends ChangeNotifier {
 
   void requestMapFocus(MapFocusTarget target) {
     _pendingFocus = target;
+    mapFocusing = true;
+    _mapFocusingTimeout?.cancel();
+    _mapFocusingTimeout = Timer(_mapFocusingMaxDuration, clearMapFocusing);
     notifyListeners();
   }
 
@@ -479,6 +487,14 @@ class MapProvider extends ChangeNotifier {
     final t = _pendingFocus;
     _pendingFocus = null;
     return t;
+  }
+
+  void clearMapFocusing() {
+    _mapFocusingTimeout?.cancel();
+    _mapFocusingTimeout = null;
+    if (!mapFocusing) return;
+    mapFocusing = false;
+    notifyListeners();
   }
 
   void setPendingMypageReopen({int? reportId, int? feedbackId}) {
@@ -507,6 +523,7 @@ class MapProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _mapFocusingTimeout?.cancel();
     _cancelAccidentDebounce();
     super.dispose();
   }
