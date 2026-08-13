@@ -364,11 +364,15 @@ class _MapPageState extends State<MapPage>
   void _armIdleFollowTimer() {
     _idleFollowTimer?.cancel();
     if (!mounted || _followMe || !_isMapRouteActive) return;
+    // 안내 중이 아니면 자동 복귀 안 함
+    final guiding = context.read<NavProvider>().guiding;
+    if (!guiding) return;
     _idleFollowTimer = Timer(_idleFollowDuration, _onIdleFollowTimeout);
   }
 
   void _onIdleFollowTimeout() {
     if (!mounted || _followMe) return;
+    if (!context.read<NavProvider>().guiding) return;  // 안내종료후 남은 타이머 요청 종료
     if (!_isMapRouteActive) {
       // 화면 복귀 시 다시 arm
       return;
