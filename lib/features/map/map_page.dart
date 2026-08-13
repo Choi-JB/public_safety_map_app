@@ -2177,7 +2177,7 @@ class _MapPageState extends State<MapPage>
                             }
                           },
                           icon: Icon(
-                            auth.isLoggedIn ? Icons.person : Icons.login,
+                            auth.isLoggedIn ? Icons.person : Icons.person_outlined,
                             color: MapUiColors.accent,
                           ),
                         ),

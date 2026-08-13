@@ -18,6 +18,14 @@ class Env {
     defaultValue: '0f3ca47f756485555f44f6bbcdcc7a5d',
   );
 
+  /// TMAP 보행자 경로 (SK open API appKey)
+  /// `--dart-define=TMAP_APP_KEY=...` 로 주입.
+  static const String tmapAppKey = String.fromEnvironment(
+    'TMAP_APP_KEY',
+    defaultValue: 'bSZjez06059b4paLNRw123cD0U3FgN6a5INajMnR', 
+  );
+
+
   /// 서울 시청 근처 기본 중심 (웹 맵과 유사)
   static const double defaultLat = 37.5665;
   static const double defaultLng = 126.9780;

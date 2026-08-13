@@ -108,53 +108,185 @@ class _MyPageState extends State<MyPage> with SingleTickerProviderStateMixin {
     if (changed == true && mounted) await _load();
   }
 
-  Future<void> _changePassword() async {
-    final email = TextEditingController(
-      text: context.read<AuthProvider>().user?.email ?? '',
+  InputDecoration _passwordFieldDecoration({
+    required String hint,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 15),
+      filled: true,
+      fillColor: const Color(0xFFF1F5F9),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: MapUiColors.accent, width: 1.5),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: MapUiColors.report),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: MapUiColors.report, width: 1.5),
+      ),
+      suffixIcon: suffixIcon,
     );
+  }
+
+  Widget _visibilityToggle({
+    required bool obscure,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      onPressed: onPressed,
+      icon: Icon(
+        obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+        color: const Color(0xFF94A3B8),
+      ),
+    );
+  }
+
+  Future<void> _changePassword() async {
+    final email = context.read<AuthProvider>().user?.email ?? '';
     final current = TextEditingController();
     final next = TextEditingController();
+    final confirm = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var obscureCurrent = true;
+    var obscureNext = true;
+    var obscureConfirm = true;
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('비밀번호 변경'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: email,
-              decoration: const InputDecoration(labelText: '이메일'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text(
+            '비밀번호 변경',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF0F172A),
             ),
-            TextField(
-              controller: current,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: '현재 비밀번호'),
+          ),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: current,
+                  obscureText: obscureCurrent,
+                  textInputAction: TextInputAction.next,
+                  decoration: _passwordFieldDecoration(
+                    hint: '현재 비밀번호',
+                    suffixIcon: _visibilityToggle(
+                      obscure: obscureCurrent,
+                      onPressed: () => setDialogState(
+                        () => obscureCurrent = !obscureCurrent,
+                      ),
+                    ),
+                  ),
+                  validator: (v) =>
+                      (v == null || v.isEmpty) ? '현재 비밀번호를 입력하세요' : null,
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: next,
+                  obscureText: obscureNext,
+                  textInputAction: TextInputAction.next,
+                  decoration: _passwordFieldDecoration(
+                    hint: '새 비밀번호',
+                    suffixIcon: _visibilityToggle(
+                      obscure: obscureNext,
+                      onPressed: () =>
+                          setDialogState(() => obscureNext = !obscureNext),
+                    ),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return '새 비밀번호를 입력하세요';
+                    if (v.length < 6) return '6자 이상 입력하세요';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: confirm,
+                  obscureText: obscureConfirm,
+                  textInputAction: TextInputAction.done,
+                  decoration: _passwordFieldDecoration(
+                    hint: '새 비밀번호 확인',
+                    suffixIcon: _visibilityToggle(
+                      obscure: obscureConfirm,
+                      onPressed: () => setDialogState(
+                        () => obscureConfirm = !obscureConfirm,
+                      ),
+                    ),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) {
+                      return '새 비밀번호를 다시 입력하세요';
+                    }
+                    if (v != next.text) return '비밀번호가 일치하지 않습니다';
+                    return null;
+                  },
+                  onFieldSubmitted: (_) {
+                    if (formKey.currentState?.validate() ?? false) {
+                      Navigator.pop(ctx, true);
+                    }
+                  },
+                ),
+              ],
             ),
-            TextField(
-              controller: next,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: '새 비밀번호'),
+          ),
+          actionsAlignment: MainAxisAlignment.center,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.pop(ctx, true);
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: MapUiColors.accent,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: const Text('변경'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('변경'),
-          ),
-        ],
       ),
     );
+
+    final currentPw = current.text;
+    final nextPw = next.text;
+    current.dispose();
+    next.dispose();
+    confirm.dispose();
+
     if (ok != true || !mounted) return;
     try {
       await context.read<AuthRepository>().changePassword(
-        email: email.text.trim(),
-        password: current.text,
-        newPassword: next.text,
+        email: email,
+        password: currentPw,
+        newPassword: nextPw,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(
