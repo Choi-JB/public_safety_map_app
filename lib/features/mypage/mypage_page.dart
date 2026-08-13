@@ -19,6 +19,100 @@ import '../../providers/map_provider.dart';
 import '../../widgets/media_image.dart';
 import '../../core/geo/geo_utils.dart';
 
+const _kText = Color(0xFF0F172A);
+const _kMuted = Color(0xFF64748B);
+const _kBorder = Color(0xFFE2E8F0);
+const _kFieldFill = Color(0xFFF1F5F9);
+
+Future<bool> _confirmDeleteDialog({
+  required BuildContext context,
+  required String title,
+  required String message,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(
+        title,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          color: _kText,
+        ),
+      ),
+      content: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 15, color: _kMuted, height: 1.4),
+      ),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('취소', style: TextStyle(color: _kMuted)),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: MapUiColors.report,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+          ),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('삭제'),
+        ),
+      ],
+    ),
+  );
+  return ok == true;
+}
+
+InputDecoration _sheetFieldDecoration({required String label}) {
+  return InputDecoration(
+    labelText: label,
+    alignLabelWithHint: true,
+    labelStyle: const TextStyle(color: _kMuted, fontSize: 14),
+    filled: true,
+    fillColor: _kFieldFill,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide.none,
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide.none,
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: MapUiColors.accent, width: 1.5),
+    ),
+  );
+}
+
+ButtonStyle _sheetOutlineStyle() {
+  return OutlinedButton.styleFrom(
+    foregroundColor: _kText,
+    side: const BorderSide(color: Color(0xFFCBD5E1)),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    padding: const EdgeInsets.symmetric(vertical: 14),
+  );
+}
+
+ButtonStyle _sheetFilledStyle({Color background = MapUiColors.accent}) {
+  return FilledButton.styleFrom(
+    backgroundColor: background,
+    foregroundColor: Colors.white,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    padding: const EdgeInsets.symmetric(vertical: 14),
+  );
+}
+
 const _safetyFeelings = ['안전', '보통', '불안'];
 
 int? _toIntId(Object? id) {
@@ -200,6 +294,10 @@ class _MyPageState extends State<MyPage> {
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
+      backgroundColor: const Color(0xFFF8FAFC),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => _ReportDetailSheet(report: r),
     );
     if (!mounted) return;
@@ -221,6 +319,10 @@ class _MyPageState extends State<MyPage> {
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
+      backgroundColor: const Color(0xFFF8FAFC),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => _FeedbackDetailSheet(feedback: f),
     );
     if (!mounted) return;
@@ -473,7 +575,14 @@ class _MyPageState extends State<MyPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_title),
+          title: Text(
+            _title,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF0F172A),
+            ),
+          ),
           leading: onMenu
               ? null
               : IconButton(
@@ -808,38 +917,24 @@ class _ReportListState extends State<_ReportList> {
   @override
   Widget build(BuildContext context) {
     if (widget.reports.isEmpty && !widget.loadingMore) {
-      return const Center(child: Text('제보가 없습니다'));
+      return const _EmptyListHint(message: '제보가 없습니다');
     }
-    final showFooter = widget.loadingMore;
     return ListView.separated(
       controller: _controller,
-      itemCount: widget.reports.length + (showFooter ? 1 : 0),
-      separatorBuilder: (_, __) => const Divider(height: 1),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      itemCount: widget.reports.length + (widget.loadingMore ? 1 : 0),
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
         if (i >= widget.reports.length) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          );
+          return const _ListLoadingFooter();
         }
         final r = widget.reports[i];
-        return ListTile(
-          title: Text(r.type ?? '제보'),
-          subtitle: Text(
-            r.description ?? '',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: Text(
-            r.createdAt?.split('T').first ?? '',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+        final date = r.createdAt?.split('T').first ?? '';
+        final desc = (r.description ?? '').trim();
+        return _ContentCard(
+          title: r.type ?? '제보',
+          subtitle: desc.isEmpty ? null : desc,
+          meta: date.isEmpty ? null : date,
           onTap: () => widget.onTap(r),
         );
       },
@@ -916,46 +1011,162 @@ class _FeedbackListState extends State<_FeedbackList> {
   @override
   Widget build(BuildContext context) {
     if (widget.feedbacks.isEmpty && !widget.loadingMore) {
-      return const Center(
-        child: Text(
-          '피드백이 없습니다\n지도에서 격자를 선택해 작성할 수 있습니다',
-          textAlign: TextAlign.center,
-        ),
+      return const _EmptyListHint(
+        message: '피드백이 없습니다\n지도에서 격자를 선택해 작성할 수 있습니다',
       );
     }
-    final showFooter = widget.loadingMore;
     return ListView.separated(
       controller: _controller,
-      itemCount: widget.feedbacks.length + (showFooter ? 1 : 0),
-      separatorBuilder: (_, __) => const Divider(height: 1),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      itemCount: widget.feedbacks.length + (widget.loadingMore ? 1 : 0),
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (_, i) {
         if (i >= widget.feedbacks.length) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          );
+          return const _ListLoadingFooter();
         }
         final f = widget.feedbacks[i];
-        return ListTile(
-          title: Text(f.safetyFeeling ?? '피드백'),
-          subtitle: Text(
-            (f.comment?.isNotEmpty == true) ? f.comment! : f.tags.join(', '),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: Text(
-            f.createdAt?.split('T').first ?? '',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+        final date = f.createdAt?.split('T').first ?? '';
+        final body = (f.comment?.isNotEmpty == true)
+            ? f.comment!
+            : f.tags.join(', ');
+        return _ContentCard(
+          title: f.safetyFeeling ?? '피드백',
+          subtitle: body.isEmpty ? null : body,
+          meta: date.isEmpty ? null : date,
           onTap: () => widget.onTap(f),
         );
       },
+    );
+  }
+}
+
+class _ContentCard extends StatelessWidget {
+  const _ContentCard({
+    required this.title,
+    required this.onTap,
+    this.subtitle,
+    this.meta,
+  });
+
+  final String title;
+  final String? subtitle;
+  final String? meta;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xFFE2E8F0)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          height: 1.35,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                    if (meta != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        meta!,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: MapUiColors.accent,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.chevron_right,
+                color: Color(0xFF94A3B8),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyListHint extends StatelessWidget {
+  const _EmptyListHint({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.45,
+              color: Color(0xFF64748B),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ListLoadingFooter extends StatelessWidget {
+  const _ListLoadingFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 16),
+      child: Center(
+        child: SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      ),
     );
   }
 }
@@ -1059,23 +1270,10 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
     final id = _toIntId(widget.report.id);
     if (id == null) return;
 
-    final ok = await showDialog<bool>(
+    final ok = await _confirmDeleteDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('제보 삭제'),
-        content: const Text('이 제보를 삭제할까요?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: MapUiColors.report),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('삭제'),
-          ),
-        ],
-      ),
+      title: '제보 삭제',
+      message: '이 제보를 삭제할까요?',
     );
     if (ok != true || !mounted) return;
 
@@ -1105,77 +1303,106 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
   Widget build(BuildContext context) {
     final r = widget.report;
     final mq = MediaQuery.of(context);
-    // 시스템 네비 + 키보드 (피드백/제보 작성과 동일)
     final bottomPad = 24 + mq.viewPadding.bottom + mq.viewInsets.bottom;
+    final meta = [
+      if (r.createdAt != null) r.createdAt!.split('T').first,
+      if (r.lat != null && r.lng != null)
+        '${r.lat!.toStringAsFixed(5)}, ${r.lng!.toStringAsFixed(5)}',
+    ].join(' · ');
 
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPad),
+      padding: EdgeInsets.fromLTRB(16, 8, 16, bottomPad),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            r.type ?? '제보',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _kBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  r.type ?? '제보',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: _kText,
+                  ),
+                ),
+                if (meta.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    meta,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: MapUiColors.accent,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                if (_editing) ...[
+                  TextField(
+                    controller: _desc,
+                    maxLines: 5,
+                    style: const TextStyle(fontSize: 15, color: _kText),
+                    decoration: _sheetFieldDecoration(label: '설명'),
+                  ),
+                  const SizedBox(height: 12),
+                  _ImageEditBlock(
+                    remoteUrl: _clearImage ? null : _currentImgUrl,
+                    localPath: _localImagePath,
+                    onPick: _pickImage,
+                    onClear: () => setState(() {
+                      _localImagePath = null;
+                      _clearImage = true;
+                      _currentImgUrl = null;
+                    }),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '유형·위치는 수정할 수 없습니다.',
+                    style: TextStyle(fontSize: 12, color: _kMuted),
+                  ),
+                ] else ...[
+                  Text(
+                    (r.description ?? '').isEmpty ? '(설명 없음)' : r.description!,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      height: 1.45,
+                      color: _kText,
+                    ),
+                  ),
+                  if (resolveMediaUrl(_currentImgUrl) != null) ...[
+                    const SizedBox(height: 12),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: MediaCoverImage(
+                        url: _currentImgUrl,
+                        expanded: true,
+                      ),
+                    ),
+                  ],
+                ],
+              ],
+            ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            [
-              if (r.createdAt != null) r.createdAt!.split('T').first,
-              if (r.lat != null && r.lng != null)
-                '${r.lat!.toStringAsFixed(5)}, ${r.lng!.toStringAsFixed(5)}',
-            ].join(' · '),
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-          ),
-          const SizedBox(height: 16),
-          if (_editing) ...[
-            TextField(
-              controller: _desc,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: '설명',
-                alignLabelWithHint: true,
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            _ImageEditBlock(
-              remoteUrl: _clearImage ? null : _currentImgUrl,
-              localPath: _localImagePath,
-              onPick: _pickImage,
-              onClear: () => setState(() {
-                _localImagePath = null;
-                _clearImage = true;
-                _currentImgUrl = null;
-              }),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '유형·위치는 수정할 수 없습니다.',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-            ),
-          ] else ...[
-            Text(
-              (r.description ?? '').isEmpty ? '(설명 없음)' : r.description!,
-              style: const TextStyle(fontSize: 15, height: 1.4),
-            ),
-            if (resolveMediaUrl(_currentImgUrl) != null) ...[
-              const SizedBox(height: 12),
-              MediaCoverImage(url: _currentImgUrl, expanded: true),
-            ],
-          ],
-
-          /// 제보 위치로 이동 버튼
           if (!_editing && !_busy) ...[
+            const SizedBox(height: 12),
             OutlinedButton.icon(
+              style: _sheetOutlineStyle(),
               onPressed: () {
                 final p = tryLatLng(r.lat, r.lng);
                 if (p == null) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(const SnackBar(content: Text('위치 정보가 없습니다')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('위치 정보가 없습니다')),
+                  );
                   return;
                 }
-                // 부모에서 push 후, 지도 뒤로가기 시 상세를 다시 연다
                 Navigator.pop(
                   context,
                   MapFocusTarget(
@@ -1188,14 +1415,13 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
               icon: const Icon(Icons.map_outlined, size: 18),
               label: const Text('제보 위치로 이동'),
             ),
-            const SizedBox(height: 12),
           ],
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           if (_busy)
             const Center(
               child: Padding(
                 padding: EdgeInsets.all(12),
-                child: CircularProgressIndicator(),
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
             )
           else if (_editing)
@@ -1203,6 +1429,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
               children: [
                 Expanded(
                   child: OutlinedButton(
+                    style: _sheetOutlineStyle(),
                     onPressed: () {
                       setState(() {
                         _editing = false;
@@ -1218,6 +1445,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton(
+                    style: _sheetFilledStyle(),
                     onPressed: _save,
                     child: const Text('저장'),
                   ),
@@ -1229,6 +1457,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
+                    style: _sheetOutlineStyle(),
                     onPressed: () => setState(() => _editing = true),
                     icon: const Icon(Icons.edit_outlined, size: 18),
                     label: const Text('수정'),
@@ -1237,9 +1466,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: MapUiColors.report,
-                    ),
+                    style: _sheetFilledStyle(background: MapUiColors.report),
                     onPressed: _delete,
                     icon: const Icon(Icons.delete_outline, size: 18),
                     label: const Text('삭제'),
@@ -1379,23 +1606,10 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
     final id = widget.feedback.id;
     if (id <= 0) return;
 
-    final ok = await showDialog<bool>(
+    final ok = await _confirmDeleteDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('피드백 삭제'),
-        content: const Text('이 피드백을 삭제할까요?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: MapUiColors.report),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('삭제'),
-          ),
-        ],
-      ),
+      title: '피드백 삭제',
+      message: '이 피드백을 삭제할까요?',
     );
     if (ok != true || !mounted) return;
 
@@ -1426,156 +1640,199 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
     final f = widget.feedback;
     final mq = MediaQuery.of(context);
     final bottomPad = 24 + mq.viewPadding.bottom + mq.viewInsets.bottom;
+    final date = f.createdAt?.split('T').first ?? '';
 
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPad),
+      padding: EdgeInsets.fromLTRB(16, 8, 16, bottomPad),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            f.safetyFeeling ?? '피드백',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            f.createdAt?.split('T').first ?? '',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-          ),
-          if (f.tags.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              children: f.tags
-                  .map(
-                    (t) => Chip(
-                      label: Text(t, style: const TextStyle(fontSize: 12, color: Color(0xFF0F172A))),
-                      backgroundColor: Colors.white,
-                      side: const BorderSide(color: Color(0xFFCBD5E1)),
-                      visualDensity: VisualDensity.compact,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  )
-                  .toList(),
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _kBorder),
             ),
-          ],
-          const SizedBox(height: 16),
-          if (_editing) ...[
-            DropdownButtonFormField<String>(
-              // ignore: deprecated_member_use
-              value: _feeling,
-              items: _safetyFeelings
-                  .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) setState(() => _feeling = v);
-              },
-              decoration: const InputDecoration(
-                labelText: '안전감',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _comment,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                labelText: '코멘트',
-                alignLabelWithHint: true,
-                border: OutlineInputBorder(),
-              ),
-            ),
-                        const SizedBox(height: 12),
-            const Text(
-              '태그',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-            ),
-            const SizedBox(height: 8),
-            if (_tagsLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Center(
-                  child: SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  f.safetyFeeling ?? '피드백',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: _kText,
                   ),
                 ),
-              )
-            else if (_allTags.isEmpty)
-              Text(
-                '등록된 태그가 없습니다',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-              )
-            else
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: _allTags.map((t) {
-                  final selected = _selectedTagIds.contains(t.id);
-                  return FilterChip(
-                    label: Text(
-                      t.name,
-                      style: TextStyle(
-                        color: selected
-                            ? MapUiColors.accent
-                            : const Color(0xFF0F172A),
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w500,
+                if (date.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    date,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: MapUiColors.accent,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+                if (!_editing && f.tags.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: f.tags
+                        .map(
+                          (t) => Chip(
+                            label: Text(
+                              t,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _kText,
+                              ),
+                            ),
+                            backgroundColor: Colors.white,
+                            side: const BorderSide(color: Color(0xFFCBD5E1)),
+                            visualDensity: VisualDensity.compact,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                if (_editing) ...[
+                  DropdownButtonFormField<String>(
+                    // ignore: deprecated_member_use
+                    value: _feeling,
+                    items: _safetyFeelings
+                        .map(
+                          (e) => DropdownMenuItem(value: e, child: Text(e)),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) setState(() => _feeling = v);
+                    },
+                    decoration: _sheetFieldDecoration(label: '안전감'),
+                    style: const TextStyle(fontSize: 15, color: _kText),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _comment,
+                    maxLines: 4,
+                    style: const TextStyle(fontSize: 15, color: _kText),
+                    decoration: _sheetFieldDecoration(label: '코멘트'),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '태그',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                      color: _kText,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_tagsLoading)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    )
+                  else if (_allTags.isEmpty)
+                    const Text(
+                      '등록된 태그가 없습니다',
+                      style: TextStyle(fontSize: 13, color: _kMuted),
+                    )
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: _allTags.map((t) {
+                        final selected = _selectedTagIds.contains(t.id);
+                        return FilterChip(
+                          label: Text(
+                            t.name,
+                            style: TextStyle(
+                              color: selected
+                                  ? MapUiColors.accent
+                                  : _kText,
+                              fontWeight: selected
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                          selected: selected,
+                          backgroundColor: Colors.white,
+                          selectedColor: MapUiColors.accentSoft,
+                          checkmarkColor: MapUiColors.accent,
+                          side: BorderSide(
+                            color: selected
+                                ? MapUiColors.accent
+                                : const Color(0xFFCBD5E1),
+                          ),
+                          onSelected: (v) {
+                            setState(() {
+                              if (v) {
+                                _selectedTagIds.add(t.id);
+                              } else {
+                                _selectedTagIds.remove(t.id);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  const SizedBox(height: 12),
+                  _ImageEditBlock(
+                    remoteUrl: _clearImage ? null : _currentImgUrl,
+                    localPath: _localImagePath,
+                    onPick: _pickImage,
+                    onClear: () => setState(() {
+                      _localImagePath = null;
+                      _clearImage = true;
+                      _currentImgUrl = null;
+                    }),
+                  ),
+                ] else ...[
+                  Text(
+                    (f.comment ?? '').isEmpty ? '(코멘트 없음)' : f.comment!,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      height: 1.45,
+                      color: _kText,
+                    ),
+                  ),
+                  if (resolveMediaUrl(_currentImgUrl) != null) ...[
+                    const SizedBox(height: 12),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: MediaCoverImage(
+                        url: _currentImgUrl,
+                        expanded: true,
                       ),
                     ),
-                    selected: selected,
-                    backgroundColor: Colors.white,
-                    selectedColor: MapUiColors.accentSoft,
-                    checkmarkColor: MapUiColors.accent,
-                    side: BorderSide(
-                      color: selected
-                          ? MapUiColors.accent
-                          : const Color(0xFFCBD5E1),
-                    ),
-                    onSelected: (v) {
-                      setState(() {
-                        if (v) {
-                          _selectedTagIds.add(t.id);
-                        } else {
-                          _selectedTagIds.remove(t.id);
-                        }
-                      });
-                    },
-                  );
-                }).toList(),
-              ),
-            const SizedBox(height: 12),
-            _ImageEditBlock(
-              remoteUrl: _clearImage ? null : _currentImgUrl,
-              localPath: _localImagePath,
-              onPick: _pickImage,
-              onClear: () => setState(() {
-                _localImagePath = null;
-                _clearImage = true;
-                _currentImgUrl = null;
-              }),
+                  ],
+                ],
+              ],
             ),
-          ] else ...[
-            Text(
-              (f.comment ?? '').isEmpty ? '(코멘트 없음)' : f.comment!,
-              style: const TextStyle(fontSize: 15, height: 1.4),
-            ),
-            if (resolveMediaUrl(_currentImgUrl) != null) ...[
-              const SizedBox(height: 12),
-              MediaCoverImage(url: _currentImgUrl, expanded: true),
-            ],
-          ],
-
-          /// 피드백 위치로 이동 버튼
+          ),
           if (!_editing && !_busy) ...[
+            const SizedBox(height: 12),
             OutlinedButton.icon(
+              style: _sheetOutlineStyle(),
               onPressed: () {
                 final gridId = _toIntId(f.gridId);
                 if (gridId == null) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(const SnackBar(content: Text('격자 정보가 없습니다')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('격자 정보가 없습니다')),
+                  );
                   return;
                 }
                 Navigator.pop(context, MapFocusTarget(gridId: gridId));
@@ -1583,15 +1840,13 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
               icon: const Icon(Icons.map_outlined, size: 18),
               label: const Text('피드백 위치로 이동'),
             ),
-            const SizedBox(height: 12),
           ],
-
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           if (_busy)
             const Center(
               child: Padding(
                 padding: EdgeInsets.all(12),
-                child: CircularProgressIndicator(),
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
             )
           else if (_editing)
@@ -1599,6 +1854,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
               children: [
                 Expanded(
                   child: OutlinedButton(
+                    style: _sheetOutlineStyle(),
                     onPressed: () {
                       setState(() {
                         _editing = false;
@@ -1617,6 +1873,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton(
+                    style: _sheetFilledStyle(),
                     onPressed: _save,
                     child: const Text('저장'),
                   ),
@@ -1628,6 +1885,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
+                    style: _sheetOutlineStyle(),
                     onPressed: () => setState(() => _editing = true),
                     icon: const Icon(Icons.edit_outlined, size: 18),
                     label: const Text('수정'),
@@ -1636,9 +1894,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: MapUiColors.report,
-                    ),
+                    style: _sheetFilledStyle(background: MapUiColors.report),
                     onPressed: _delete,
                     icon: const Icon(Icons.delete_outline, size: 18),
                     label: const Text('삭제'),
@@ -1690,6 +1946,7 @@ class _ImageEditBlock extends StatelessWidget {
           children: [
             Expanded(
               child: OutlinedButton.icon(
+                style: _sheetOutlineStyle(),
                 onPressed: onPick,
                 icon: const Icon(Icons.photo_outlined, size: 18),
                 label: Text(hasLocal || hasRemote ? '사진 변경' : '사진 추가'),
@@ -1699,7 +1956,7 @@ class _ImageEditBlock extends StatelessWidget {
               const SizedBox(width: 8),
               IconButton(
                 onPressed: onClear,
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close, color: _kMuted),
                 tooltip: '사진 제거',
               ),
             ],
