@@ -221,8 +221,15 @@ class _MapPageState extends State<MapPage>
   void _onRouteChanged() {
     if (!mounted) return;
     if (_isMapRouteActive) {
-      _onMapScreenVisibilityMaybeResumed();
-      unawaited(_consumePendingFocus());
+      final map = context.read<MapProvider>();
+      final focusing = map.pendingFocus != null || map.mapFocusing;
+      if (focusing) {
+        // 마이페이지 포커스: GPS follow 복귀 건너뛰고 바로 목적지로
+        _disableFollowForFocus();
+        unawaited(_consumePendingFocus());
+      } else {
+        _onMapScreenVisibilityMaybeResumed();
+      }
     } else {
       // 다른 화면: idle 정지 (6-A)
       _idleFollowTimer?.cancel();
@@ -230,8 +237,17 @@ class _MapPageState extends State<MapPage>
   }
 
   void _onMapProviderChanged() {
-    if (!mounted || !_booted || !_isMapRouteActive) return;
-    if (_mapListened?.pendingFocus == null) return;
+    if (!mounted) return;
+    final map = _mapListened;
+    if (map == null) return;
+
+    // 포커스 예약 즉시 follow OFF (화면 복귀 전 GPS 당김 방지)
+    if ((map.mapFocusing || map.pendingFocus != null) && _followMe) {
+      _disableFollowForFocus();
+    }
+
+    if (!_booted || !_isMapRouteActive) return;
+    if (map.pendingFocus == null) return;
     unawaited(_consumePendingFocus());
   }
 
@@ -242,8 +258,25 @@ class _MapPageState extends State<MapPage>
     await _applyMapFocus(focus);
   }
 
+  /// 포커스 이동용: follow OFF + idle 타이머도 걸지 않음
+  void _disableFollowForFocus() {
+    _followZoomOverride = null;
+    _idleFollowTimer?.cancel();
+    if (!_followMe) return;
+    if (mounted) {
+      setState(() => _followMe = false);
+    } else {
+      _followMe = false;
+    }
+  }
+
   void _onMapScreenVisibilityMaybeResumed() {
     if (!mounted || !_isMapRouteActive) return;
+    // 포커스 이동 중에는 내 위치로 카메라를 당기지 않음
+    if (_mapListened?.mapFocusing == true ||
+        _mapListened?.pendingFocus != null) {
+      return;
+    }
     if (_followMe) {
       _syncFollowCamera();
     } else {
@@ -417,6 +450,7 @@ class _MapPageState extends State<MapPage>
 
     void _syncFollowCamera() {
     if (!_followMe || !mounted || !_isMapRouteActive) return;
+    if (_mapListened?.mapFocusing == true) return;
     final raw = _displayPos ?? _myPos;
     if (raw == null) return;
     final p = tryLatLng(raw.latitude, raw.longitude);
@@ -558,49 +592,52 @@ class _MapPageState extends State<MapPage>
 
   Future<void> _boot() async {
     final map = context.read<MapProvider>();
-    final focus = widget.focus ?? map.takePendingFocus();
-    final focusPoint =
-        focus != null ? tryLatLng(focus.lat, focus.lng) : null;
+    try {
+      final focus = widget.focus ?? map.takePendingFocus();
+      final focusPoint =
+          focus != null ? tryLatLng(focus.lat, focus.lng) : null;
 
-    // 마이페이지 등에서 특정 위치로 올 때 GPS 따라가기가 카메라를 가로채지 않게
-    if (focus != null) {
-      _onMapUserGesture();
-    }
+      // 마이페이지 등에서 특정 위치로 올 때 GPS 따라가기가 카메라를 가로채지 않게
+      if (focus != null) {
+        _disableFollowForFocus();
+      }
 
-    await _initialLoad(
-      cameraCenter: focusPoint,
-      cameraZoom: focusPoint != null ? 16.0 : null,
-    );
-    if (!mounted) return;
-
-    final alert = context.read<NearbyReportAlert>();
-    _openReportSub = alert.openReportStream.listen((id) {
+      await _initialLoad(
+        cameraCenter: focusPoint,
+        cameraZoom: focusPoint != null ? 16.0 : null,
+      );
       if (!mounted) return;
-      alert.takePendingOpenReportId();
-      unawaited(_openReportById(id));
-    });
-    _openAccidentSub = alert.openAccidentStream.listen((z) {
-      if (!mounted) return;
-      alert.takePendingOpenAccident();
-      unawaited(_openAccidentZone(z));
-    });
 
-    final pending = alert.takePendingOpenReportId();
-    if (pending != null) {
-      await _openReportById(pending);
-    }
-    final pendingAcc = alert.takePendingOpenAccident();
-    if (pendingAcc != null) {
-      await _openAccidentZone(pendingAcc);
-    }
+      final alert = context.read<NearbyReportAlert>();
+      _openReportSub = alert.openReportStream.listen((id) {
+        if (!mounted) return;
+        alert.takePendingOpenReportId();
+        unawaited(_openReportById(id));
+      });
+      _openAccidentSub = alert.openAccidentStream.listen((z) {
+        if (!mounted) return;
+        alert.takePendingOpenAccident();
+        unawaited(_openAccidentZone(z));
+      });
 
-    if (focus != null) {
-      await _applyMapFocus(focus, alreadyLoadedAt: focusPoint);
-    }
+      final pending = alert.takePendingOpenReportId();
+      if (pending != null) {
+        await _openReportById(pending);
+      }
+      final pendingAcc = alert.takePendingOpenAccident();
+      if (pendingAcc != null) {
+        await _openAccidentZone(pendingAcc);
+      }
 
-    // go('/map')로 복귀했는데 _boot가 이미 끝난 인스턴스면 위에서 소비.
-    // 재생성 직후 request가 늦게 도착한 경우 대비
-    await _consumePendingFocus();
+      if (focus != null) {
+        await _applyMapFocus(focus, alreadyLoadedAt: focusPoint);
+      }
+
+      // go('/map')로 복귀했는데 _boot가 이미 끝난 인스턴스면 위에서 소비.
+      await _consumePendingFocus();
+    } finally {
+      map.clearMapFocusing();
+    }
   }
 
   /// 마이페이지·알림 외 경로에서 전달된 지도 포커스 적용
@@ -608,50 +645,64 @@ class _MapPageState extends State<MapPage>
     MapFocusTarget focus, {
     LatLng? alreadyLoadedAt,
   }) async {
-    if (!mounted) return;
-    _onMapUserGesture();
-
-    final alert = context.read<NearbyReportAlert>();
-    final p = tryLatLng(focus.lat, focus.lng);
-    if (p != null) {
-      _focusMapOn(p, zoom: 16);
-      final same = alreadyLoadedAt != null &&
-          (alreadyLoadedAt.latitude - p.latitude).abs() < 1e-9 &&
-          (alreadyLoadedAt.longitude - p.longitude).abs() < 1e-9;
-      if (!same) {
-        await _loadAround(p, 16);
-      }
+    void clearFocusing() {
+      (_mapListened ??
+              (mounted ? context.read<MapProvider>() : null))
+          ?.clearMapFocusing();
     }
 
-    final reportId = focus.reportId;
-    if (reportId != null && mounted) {
-      final map = context.read<MapProvider>();
-      ReportItem? found;
-      for (final item in map.reports) {
-        if (item.id == reportId) {
-          found = item;
-          break;
+    if (!mounted) {
+      clearFocusing();
+      return;
+    }
+    try {
+      _disableFollowForFocus();
+
+      final alert = context.read<NearbyReportAlert>();
+      final p = tryLatLng(focus.lat, focus.lng);
+      final reportId = focus.reportId;
+
+      // 캐시에 제보가 있어도 viewport 마커는 map.reports에서 그리므로
+      // 이동 후 항상 _loadAround 한다. (이미 동일 좌표로 initialLoad 한 경우만 생략)
+      if (p != null) {
+        _focusMapOn(p, zoom: 16);
+        final same = alreadyLoadedAt != null &&
+            (alreadyLoadedAt.latitude - p.latitude).abs() < 1e-9 &&
+            (alreadyLoadedAt.longitude - p.longitude).abs() < 1e-9;
+        if (!same) {
+          await _loadAround(p, 16);
+        }
+        if (!mounted) return;
+
+        if (reportId != null) {
+          ReportItem? after;
+          for (final item in context.read<MapProvider>().reports) {
+            if (item.id == reportId) {
+              after = item;
+              break;
+            }
+          }
+          after ??= alert.cachedReport(reportId);
+          if (after != null) {
+            _selectReport(after, moveMap: false);
+          }
         }
       }
-      found ??= alert.cachedReport(reportId);
-      if (found != null) {
-        _selectReport(found, moveMap: true);
-      } else if (p != null) {
-        _focusMapOn(p, zoom: 16);
-      }
-    }
 
-    final gridId = focus.gridId;
-    if (gridId != null && mounted) {
-      await _onGridTap(gridId);
-      if (!mounted) return;
-      final detail = context.read<MapProvider>().selectedGridDetail;
-      final gp = tryLatLng(detail?.lat, detail?.lng);
-      if (gp != null) {
-        _onMapUserGesture();
-        _focusMapOn(gp, zoom: 16);
-        await _loadAround(gp, 16);
+      final gridId = focus.gridId;
+      if (gridId != null && mounted) {
+        await _onGridTap(gridId);
+        if (!mounted) return;
+        final detail = context.read<MapProvider>().selectedGridDetail;
+        final gp = tryLatLng(detail?.lat, detail?.lng);
+        if (gp != null) {
+          _disableFollowForFocus();
+          _focusMapOn(gp, zoom: 16);
+          await _loadAround(gp, 16);
+        }
       }
+    } finally {
+      clearFocusing();
     }
   }
 
@@ -950,13 +1001,24 @@ class _MapPageState extends State<MapPage>
     _booted = true;
 
     // 기본값: 서울 → 가능하면 GPS로 교체
-    // cameraCenter가 있으면(마이페이지 포커스) 카메라는 그쪽으로, GPS는 내 위치 마커만
+    // cameraCenter가 있으면(마이페이지 포커스) 카메라는 그쪽으로, GPS 대기는 생략
     var c = cameraCenter ??
         coerceLatLng(
           context.read<MapProvider>().center.latitude,
           context.read<MapProvider>().center.longitude,
         );
     var z = cameraZoom ?? (cameraCenter != null ? 16.0 : 14.0);
+
+    if (cameraCenter != null) {
+      if (!mounted) return;
+      context.read<MapProvider>().setCenter(c);
+      context.read<MapProvider>().setZoom(z);
+      _safeMapMove(c, z);
+      await _loadAround(c, z);
+      // 내 위치 마커는 백그라운드로 (포커스 이동을 막지 않음)
+      unawaited(_tryStartLocationTracking(requestPermission: false));
+      return;
+    }
 
     final hasLocation =
         await _ensureLocationPermission(request: true);
@@ -970,10 +1032,8 @@ class _MapPageState extends State<MapPage>
         );
         final p = tryLatLng(pos.latitude, pos.longitude);
         if (p != null) {
-          if (cameraCenter == null) {
-            c = p;
-            z = _myLocationZoom;
-          }
+          c = p;
+          z = _myLocationZoom;
           if (mounted) {
             _snapMyLocation(
               p,
@@ -2543,6 +2603,24 @@ class _MapPageState extends State<MapPage>
         ),
             ),
           ),
+
+          // 마이페이지 「위치로 이동」 대기 스피너
+          if (map.mapFocusing)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0x33000000),
+                child: Center(
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
