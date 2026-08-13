@@ -13,7 +13,11 @@ class NavRouteLayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final nav = context.watch<NavProvider>();
-    final pts = nav.selected?.points;
+    final pts = (nav.guiding &&
+        nav.guideDisplayPoints != null &&
+        nav.guideDisplayPoints!.length >= 2)
+    ? nav.guideDisplayPoints
+    : nav.selected?.points;
     if (pts == null || pts.length < 2) {
       return const SizedBox.shrink();
     }

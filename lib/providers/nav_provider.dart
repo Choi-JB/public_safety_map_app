@@ -50,6 +50,9 @@ class NavProvider extends ChangeNotifier {
   double distanceToStepM = 0;
   bool arrived = false;
 
+  /// 안내 중 지도에 그릴 남은 경로 (원본 selected.points는 유지)
+  List<LatLng>? guideDisplayPoints;
+
   /// 목적지 주변 도착 (경로 잔여 / 직선, m). 자동 종료 없음 → 알림에서 안내 종료.
   static const double _arriveNearM = 10;
 
@@ -142,7 +145,10 @@ class NavProvider extends ChangeNotifier {
   }
 
   /// 경로 이탈 시 TMAP 재탐색, 경로 위면 trim만 (TMAP 0회).
-  static const double _editRouteMaxOffRouteM = 50;
+  static const double _editRouteMaxOffRouteM = 25;
+  static const Duration _autoReplanCooldown = Duration(seconds: 25);
+  DateTime? _lastAutoReplanAt;
+  bool _autoReplanQueued = false;
 
   /// 경로 수정: 안내는 끄고 도착지 유지 → 현재 위치 기준으로 경로 조정 또는 재탐색
   Future<void> editRoute({LatLng? from}) async {
@@ -232,6 +238,9 @@ class NavProvider extends ChangeNotifier {
     distanceToStepM = 0;
     remainingDistanceM = 0;
     remainingDurationSec = null;
+    guideDisplayPoints = null;
+    _lastAutoReplanAt = null;
+    _autoReplanQueued = false;
   }
 
   /// 새 목적지/재탐색: 안내는 끄고 길찾기(경로 선택) 모드는 유지
@@ -249,12 +258,37 @@ class NavProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _maybeAutoReplan(LatLng me) {
+    if (!guiding || loading || _autoReplanQueued) return;
+    if (destination == null) return;
+    final last = _lastAutoReplanAt;
+    if (last != null &&
+        DateTime.now().difference(last) < _autoReplanCooldown) {
+      return;
+    }
+    _autoReplanQueued = true;
+    _lastAutoReplanAt = DateTime.now();
+    message = '경로를 벗어났습니다. 다시 찾는 중…';
+    notifyListeners();
+    Future(() async {
+      try {
+        await editRoute(from: me);
+      } finally {
+        _autoReplanQueued = false;
+      }
+    });
+  }
+
   void updateGuideProgress(LatLng me) {
     if (!guiding) return;
     final route = selected;
     if (route == null || route.points.length < 2) return;
 
     final traveled = distanceTraveledAlongRoute(route.points, me);
+
+    final remainPts = remainingPolylinePoints(route.points, traveled);
+    guideDisplayPoints = remainPts.length >= 2 ? remainPts : null;
+
     final remain = (route.distanceM - traveled).clamp(0.0, route.distanceM);
     remainingDistanceM = remain;
 
@@ -275,15 +309,22 @@ class NavProvider extends ChangeNotifier {
       arrived = true;
       currentStep = null;
       distanceToStepM = 0;
+      guideDisplayPoints = null;
       notifyListeners();
       return;
+    }
+
+    final off = distanceOffRouteM(route.points, me);
+    if (off > _editRouteMaxOffRouteM) {
+      _maybeAutoReplan(me);
     }
 
     arrived = false;
     final step = nextGuideStep(steps: route.steps, traveledM: traveled);
     currentStep = step;
     if (step != null) {
-      distanceToStepM = (step.alongRouteM - traveled).clamp(0.0, route.distanceM);
+      distanceToStepM =
+          (step.alongRouteM - traveled).clamp(0.0, route.distanceM);
     } else {
       distanceToStepM = remain;
     }
@@ -304,6 +345,9 @@ class NavProvider extends ChangeNotifier {
     distanceToStepM = 0;
     remainingDistanceM = 0;
     remainingDurationSec = null;
+    guideDisplayPoints = null;
+    _lastAutoReplanAt = null;
+    _autoReplanQueued = false;
     notifyListeners();
   }
 
