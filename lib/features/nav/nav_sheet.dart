@@ -401,7 +401,17 @@ class NavGuidanceBar extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              
+              _GuidanceActionChip(
+                label: '경로 수정',
+                onTap: nav.loading
+                    ? null
+                    : () {
+                        unawaited(
+                          context.read<NavProvider>().editRoute(from: myPos),
+                        );
+                      },
+              ),
+              const SizedBox(width: 6),
               _GuidanceActionChip(
                 label: '안내 종료',
                 onTap: () => context.read<NavProvider>().stopGuidance(),
