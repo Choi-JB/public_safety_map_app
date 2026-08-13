@@ -11,7 +11,7 @@
     <application
         android:label="안전지도"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/public_safaty_map_icon_512x512"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
