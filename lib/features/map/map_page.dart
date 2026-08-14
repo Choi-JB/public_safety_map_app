@@ -480,7 +480,7 @@ class _MapPageState extends State<MapPage>
           now.difference(last) >= _followProviderSyncInterval) {
         _lastFollowProviderSync = now;
         mp.setCenter(p);
-        _maybeLoadAroundWhileFollowing(p, z); // follow 중 이 거리(m) 이상 이동 시 1회 로드
+        // _maybeLoadAroundWhileFollowing(p, z); // follow 중 이 거리(m) 이상 이동 시 1회 로드
       }
     } catch (_) {
       // ignore — remount 경로에 맡김
@@ -698,7 +698,7 @@ class _MapPageState extends State<MapPage>
         if (gp != null) {
           _disableFollowForFocus();
           _focusMapOn(gp, zoom: 16);
-          await _loadAround(gp, 16);
+          // await _loadAround(gp, 16);
         }
       }
     } finally {
