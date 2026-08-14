@@ -10,7 +10,7 @@ class MyPageRepository {
     return MyPageSummary.fromJson(data);
   }
 
-  Future<List<MyReport>> fetchReports({int page = 1, int limit = 20}) async {
+  Future<List<MyReport>> fetchReports({int page = 1, int limit = 10}) async {
     final data = await _api.get<dynamic>(
       '/mypage/report',
       query: {'page': page, 'limit': limit},
@@ -19,7 +19,7 @@ class MyPageRepository {
     return list.map(MyReport.fromJson).toList();
   }
 
-  Future<List<MyFeedback>> fetchFeedbacks({int page = 1, int limit = 20}) async {
+  Future<List<MyFeedback>> fetchFeedbacks({int page = 1, int limit = 10}) async {
     final data = await _api.get<dynamic>(
       '/mypage/feedback',
       query: {'page': page, 'limit': limit},
