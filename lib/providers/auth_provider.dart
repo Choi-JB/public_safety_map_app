@@ -8,14 +8,15 @@ import '../core/network/api_exception.dart';
 import '../core/network/user_error.dart';
 import '../data/models/models.dart';
 import '../data/repositories/auth_repository.dart';
-
+import '../services/fcm_service.dart';
 class AuthProvider extends ChangeNotifier {
-  AuthProvider(this._api, this._authRepo);
+  AuthProvider(this._api, this._authRepo, this._fcm);
 
   final ApiClient _api;
   final AuthRepository _authRepo;
   final _storage = const FlutterSecureStorage();
   static const _userKey = 'auth_user';
+  final FcmService _fcm;
 
   AuthUser? user;
   bool loading = false;
@@ -30,6 +31,7 @@ class AuthProvider extends ChangeNotifier {
     if (token != null && raw != null) {
       try {
         user = AuthUser.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        await _fcm.registerCurrentToken();
       } catch (_) {
         await _api.clearSession();
         await _storage.delete(key: _userKey);
@@ -55,6 +57,7 @@ class AuthProvider extends ChangeNotifier {
         key: _userKey,
         value: jsonEncode(result.user.toJson()),
       );
+      await _fcm.registerCurrentToken();
       return true;
     } on ApiException catch (e) {
       error = userFacingError(e, fallback: '로그인에 실패했습니다.');
@@ -96,6 +99,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    //await _fcm.unregisterCurrentToken(); // 로그아웃 시 토큰 삭제 기능 추가 예정
     await _authRepo.logout();
     user = null;
     await _storage.delete(key: _userKey);
