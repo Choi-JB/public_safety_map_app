@@ -15,6 +15,7 @@ import '../../data/repositories/feedback_repository.dart';
 import '../../data/repositories/mypage_repository.dart';
 import '../../data/repositories/report_repository.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/fcm_inbox_store.dart';
 import '../../providers/map_provider.dart';
 import '../../widgets/media_image.dart';
 import '../../core/geo/geo_utils.dart';
@@ -128,7 +129,7 @@ class MyPage extends StatefulWidget {
   State<MyPage> createState() => _MyPageState();
 }
 
-enum _MyPageSection { menu, reports, feedbacks }
+enum _MyPageSection { menu, reports, feedbacks, notifications }
 
 class _MyPageState extends State<MyPage> {
   static const _pageSize = 10;
@@ -285,7 +286,51 @@ class _MyPageState extends State<MyPage> {
       if (found == null) return;
       setState(() => _section = _MyPageSection.feedbacks);
       await _openFeedbackDetail(found);
+      return;
     }
+
+    if (pending.notifications) {
+      setState(() => _section = _MyPageSection.notifications);
+    }
+  }
+
+  Future<void> _openNotificationLocation(AppNotification item) async {
+    await context.read<FcmInboxStore>().markRead(item.id);
+    if (!mounted) return;
+    final p = tryLatLng(item.lat, item.lng);
+    if (p == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('위치 정보가 없습니다')),
+      );
+      return;
+    }
+    final map = context.read<MapProvider>();
+    map.setPendingMypageReopen(notifications: true);
+    map.requestMapFocus(
+      MapFocusTarget(
+        lat: p.latitude,
+        lng: p.longitude,
+        reportId: item.reportId,
+        gridId: item.gridId,
+      ),
+    );
+    context.go('/map');
+  }
+
+  Future<void> _deleteAllNotifications() async {
+    final inbox = context.read<FcmInboxStore>();
+    if (inbox.items.isEmpty) return;
+    final ok = await _confirmDeleteDialog(
+      context: context,
+      title: '알림 전체 삭제',
+      message: '받은 알림을 모두 삭제할까요?',
+    );
+    if (!ok || !mounted) return;
+    await inbox.clearAll();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('알림을 모두 삭제했습니다')),
+    );
   }
 
   Future<void> _openReportDetail(MyReport r) async {
@@ -534,6 +579,7 @@ class _MyPageState extends State<MyPage> {
         _MyPageSection.menu => '마이페이지',
         _MyPageSection.reports => '내 제보',
         _MyPageSection.feedbacks => '내 피드백',
+        _MyPageSection.notifications => '알림 목록',
       };
 
   Future<void> _logout() async {
@@ -565,6 +611,7 @@ class _MyPageState extends State<MyPage> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final inbox = context.watch<FcmInboxStore>();
     final onMenu = _section == _MyPageSection.menu;
 
     return PopScope(
@@ -597,6 +644,12 @@ class _MyPageState extends State<MyPage> {
                 onPressed: _logout,
                 icon: const Icon(Icons.logout),
               ),
+            if (_section == _MyPageSection.notifications)
+              IconButton(
+                tooltip: '알림 전체 삭제',
+                onPressed: inbox.items.isEmpty ? null : _deleteAllNotifications,
+                icon: const Icon(Icons.delete_outline),
+              ),
           ],
         ),
         body: loading
@@ -621,10 +674,14 @@ class _MyPageState extends State<MyPage> {
                         email: auth.user?.email ?? '',
                         reportCount: summary?.reportCount ?? 0,
                         feedbackCount: summary?.feedbackCount ?? 0,
+                        unreadNotificationCount: inbox.unreadCount,
                         onReports: () =>
                             setState(() => _section = _MyPageSection.reports),
                         onFeedbacks: () => setState(
                           () => _section = _MyPageSection.feedbacks,
+                        ),
+                        onNotifications: () => setState(
+                          () => _section = _MyPageSection.notifications,
                         ),
                         onChangePassword: _changePassword,
                       ),
@@ -642,6 +699,11 @@ class _MyPageState extends State<MyPage> {
                         onLoadMore: _loadMoreFeedbacks,
                         onTap: _openFeedbackDetail,
                       ),
+                    _MyPageSection.notifications => _NotificationList(
+                        notifications: inbox.items,
+                        onTap: inbox.markRead,
+                        onCheckLocation: _openNotificationLocation,
+                      ),
                   },
       ),
     );
@@ -654,8 +716,10 @@ class _MenuBody extends StatelessWidget {
     required this.email,
     required this.reportCount,
     required this.feedbackCount,
+    required this.unreadNotificationCount,
     required this.onReports,
     required this.onFeedbacks,
+    required this.onNotifications,
     required this.onChangePassword,
   });
 
@@ -663,8 +727,10 @@ class _MenuBody extends StatelessWidget {
   final String email;
   final int reportCount;
   final int feedbackCount;
+  final int unreadNotificationCount;
   final VoidCallback onReports;
   final VoidCallback onFeedbacks;
+  final VoidCallback onNotifications;
   final VoidCallback onChangePassword;
 
   @override
@@ -727,6 +793,14 @@ class _MenuBody extends StatelessWidget {
               label: '내 피드백',
               subtitle: '$feedbackCount건',
               onTap: onFeedbacks,
+            ),
+            _MenuTile(
+              icon: Icons.notifications_outlined,
+              label: '알림 목록',
+              subtitle: unreadNotificationCount > 0
+                  ? '미확인 $unreadNotificationCount건'
+                  : null,
+              onTap: onNotifications,
               showDivider: false,
             ),
           ],
@@ -788,10 +862,12 @@ class _MenuTile extends StatelessWidget {
   const _MenuTile({
     required this.label,
     required this.onTap,
+    this.icon,
     this.subtitle,
     this.showDivider = true,
   });
 
+  final IconData? icon;
   final String label;
   final String? subtitle;
   final VoidCallback onTap;
@@ -807,6 +883,10 @@ class _MenuTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             child: Row(
               children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 22, color: MapUiColors.accent),
+                  const SizedBox(width: 12),
+                ],
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1036,6 +1116,164 @@ class _FeedbackListState extends State<_FeedbackList> {
           onTap: () => widget.onTap(f),
         );
       },
+    );
+  }
+}
+
+class _NotificationList extends StatelessWidget {
+  const _NotificationList({
+    required this.notifications,
+    required this.onTap,
+    required this.onCheckLocation,
+  });
+
+  final List<AppNotification> notifications;
+  final Future<void> Function(String id) onTap;
+  final Future<void> Function(AppNotification) onCheckLocation;
+
+  @override
+  Widget build(BuildContext context) {
+    if (notifications.isEmpty) {
+      return const _EmptyListHint(message: '받은 알림이 없습니다');
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      itemCount: notifications.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, i) {
+        final n = notifications[i];
+        final date = n.createdAt?.replaceFirst('T', ' ') ?? '';
+        final dateShort = date.length >= 16 ? date.substring(0, 16) : date;
+        return _NotificationCard(
+          notification: n,
+          meta: dateShort.isEmpty ? null : dateShort,
+          onTap: () => onTap(n.id),
+          onCheckLocation: () => onCheckLocation(n),
+        );
+      },
+    );
+  }
+}
+
+class _NotificationCard extends StatelessWidget {
+  const _NotificationCard({
+    required this.notification,
+    required this.onTap,
+    required this.onCheckLocation,
+    this.meta,
+  });
+
+  final AppNotification notification;
+  final String? meta;
+  final VoidCallback onTap;
+  final VoidCallback onCheckLocation;
+
+  @override
+  Widget build(BuildContext context) {
+    final unread = !notification.isRead;
+    return Material(
+      color: unread ? const Color(0xFFEFF6FF) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: unread ? const Color(0xFFBFDBFE) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      notification.title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: unread ? FontWeight.w700 : FontWeight.w600,
+                        color: _kText,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: unread
+                          ? MapUiColors.accent
+                          : const Color(0xFFE2E8F0),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      unread ? '미확인' : '확인',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: unread ? Colors.white : _kMuted,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (notification.body != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  notification.body!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.35,
+                    color: _kMuted,
+                  ),
+                ),
+              ],
+              if (meta != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  meta!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: MapUiColors.accent,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+              if (tryLatLng(notification.lat, notification.lng) != null) ...[
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _kText,
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: onCheckLocation,
+                    icon: const Icon(Icons.map_outlined, size: 16),
+                    label: const Text('위치 확인'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

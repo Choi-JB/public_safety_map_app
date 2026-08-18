@@ -31,6 +31,7 @@ import 'providers/nav_provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'services/fcm_service.dart';
+import 'providers/fcm_inbox_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -56,11 +57,17 @@ Future<void> main() async {
   final nearbyAlert = NearbyReportAlert(mapRepo);
   await nearbyAlert.init(guidance: guidanceNotif);
 
+  final fcmInbox = FcmInboxStore();
+  await fcmInbox.start();
+  nearbyAlert.inbox = fcmInbox;
+  guidanceNotif.inbox = fcmInbox;
+
   //fcm 초기화
   final fcm = FcmService();
   await fcm.init(
     api: api,
-    localNotifications: nearbyAlert.notificationsPlugin, // 기존 플러그인 재사용
+    localNotifications: nearbyAlert.notificationsPlugin,
+    inbox: fcmInbox,
   );
 
   final nearbyMonitor = NearbyMonitor(nearbyAlert);
@@ -89,6 +96,7 @@ Future<void> main() async {
         Provider.value(value: mypageRepo),
         Provider.value(value: nearbyAlert),
         Provider.value(value: guidanceNotif),
+        ChangeNotifierProvider.value(value: fcmInbox),
         ChangeNotifierProvider.value(value: nearbyMonitor),
         ChangeNotifierProvider.value(value: auth),
         ChangeNotifierProvider.value(value: mapProvider),

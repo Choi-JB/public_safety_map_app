@@ -99,10 +99,12 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
-    //await _fcm.unregisterCurrentToken(); // 로그아웃 시 토큰 삭제 기능 추가 예정
-    await _authRepo.logout();
-    user = null;
-    await _storage.delete(key: _userKey);
-    notifyListeners();
+    try {
+    await _fcm.unregisterCurrentToken();
+  } catch (_) {}
+  await _authRepo.logout();
+  user = null;
+  await _storage.delete(key: _userKey);
+  notifyListeners();
   }
 }

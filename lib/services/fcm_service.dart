@@ -2,40 +2,90 @@ import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../core/network/api_client.dart';
-import '../firebase_options.dart'; // flutterfire configure 후 생김
+import '../firebase_options.dart';
+import '../providers/fcm_inbox_store.dart';
 
-import 'package:flutter/material.dart';
+const _fcmChannelId = 'fcm_push';
+const _fcmChannelName = '서버 알림';
+const _fcmNotifId = 80001;
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  final saved = await FcmInboxStore.appendFromMessage(message);
+  if (!saved) return;
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(),
+    ),
+  );
+  final androidImpl = plugin.resolvePlatformSpecificImplementation<
+      AndroidFlutterLocalNotificationsPlugin>();
+  await androidImpl?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      _fcmChannelId,
+      _fcmChannelName,
+      description: '새로운 제보 등 서버 푸시',
+      importance: Importance.high,
+    ),
+  );
+  await _showReportNotification(plugin, message);
+}
+
+Future<void> _showReportNotification(
+  FlutterLocalNotificationsPlugin plugin,
+  RemoteMessage message,
+) async {
+  final reportId = int.tryParse(
+    '${message.data['id'] ?? message.data['reportId'] ?? ''}',
+  );
+  final title = message.notification?.title ?? '새로운 제보가 등록되었습니다';
+  final body = message.notification?.body ?? '지도를 확인해 보세요';
+  await plugin.show(
+    id: reportId != null ? 10000 + (reportId.abs() % 1000000) : _fcmNotifId,
+    title: title,
+    body: body,
+    payload: reportId != null ? 'report:$reportId' : null,
+    notificationDetails: const NotificationDetails(
+      android: AndroidNotificationDetails(
+        _fcmChannelId,
+        _fcmChannelName,
+        channelDescription: '새로운 제보 등 서버 푸시',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(),
+    ),
+  );
 }
 
 class FcmService {
   ApiClient? _api;
   FlutterLocalNotificationsPlugin? _plugin;
-
-  static const _channelId = 'fcm_push';
-  static const _channelName = '서버 알림';
-  static const _notifId = 80001;
+  FcmInboxStore? _inbox;
 
   Future<void> init({
     required ApiClient api,
     required FlutterLocalNotificationsPlugin localNotifications,
+    required FcmInboxStore inbox,
   }) async {
-    _api = api; // 반드시 저장
+    _api = api;
     _plugin = localNotifications;
+    _inbox = inbox;
 
     final androidImpl = _plugin!
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
     await androidImpl?.createNotificationChannel(
       const AndroidNotificationChannel(
-        _channelId,
-        _channelName,
+        _fcmChannelId,
+        _fcmChannelName,
         description: '새로운 제보 등 서버 푸시',
         importance: Importance.high,
       ),
@@ -51,14 +101,9 @@ class FcmService {
     final initial = await FirebaseMessaging.instance.getInitialMessage();
     if (initial != null) _handleTap(initial);
 
-    // 토큰 갱신 구독
     FirebaseMessaging.instance.onTokenRefresh.listen((token) {
-      _registerToken(token); // 인자 1개만
+      _registerToken(token);
     });
-
-    // 앱 시작 시 현재 토큰도 한 번 시도 (로그인 전이면 내부에서 return)
-    // final token = await FirebaseMessaging.instance.getToken();
-    // if (token != null) await _registerToken(token);
   }
 
   /// 로그인 직후 / hydrate 직후에 밖에서 호출
@@ -72,11 +117,13 @@ class FcmService {
     final token = await FirebaseMessaging.instance.getToken();
     if (token == null || _api == null) return;
     try {
-      await _api!.delete('/notification/아직없음');
+      await _api!.patch(
+      '/notification/unregister',
+      body: {'fcmToken': token},
+    );
     } catch (_) {}
   }
 
-  /// 토큰 등록 (내부에서 호출)
   Future<void> _registerToken(String token) async {
     final api = _api;
     if (api == null) return;
@@ -84,58 +131,31 @@ class FcmService {
     if (accessToken == null) return;
     try {
       await api.post(
-        '/notification/set-token',
+        '/notification/register',
         body: {
           'fcmToken': token,
           'device_type': Platform.isAndroid ? 'android' : 'ios',
         },
       );
     } catch (e) {
-      print('FCM Token 등록 실패: $e');
+      //debugPrint('FCM Token 등록 실패: $e');
     }
   }
 
-  /// 포그라운드 수신
   void _handleForeground(RemoteMessage message) async {
     final plugin = _plugin;
     if (plugin == null) return;
 
-    final data = message.data;
-    // 예: { "type": "report", "reportId": "123" }
-    //final type = data['type'];
+    final type = message.data['type'] as String?;
 
-    // 백엔드 type 값이 다르면 여기가 실행 안 됨. 일단 로그로 확인
-
-    debugPrint('FCM data=${message.data}');
-debugPrint('FCM notif=${message.notification?.title} / ${message.notification?.body}');
-
-  
-    if (data.containsKey('report_id')) {
-      // 기존 NearbyReportAlert 패턴처럼 알림 표시 + 탭 시 지도 이동
-      final reportId = int.tryParse('${message.data['report_id'] ?? ''}');
-  final title = message.notification?.title ?? '새로운 제보가 등록되었습니다';
-  final body = message.notification?.body ?? '지도를 확인해 보세요';
-  await plugin.show(
-    id: reportId != null ? 10000 + (reportId.abs() % 1000000) : _notifId,
-    title: title,
-    body: body,
-    payload: reportId != null ? 'report:$reportId' : null,
-    notificationDetails: const NotificationDetails(
-      android: AndroidNotificationDetails(
-        _channelId,
-        _channelName,
-        channelDescription: '새로운 제보 등 서버 푸시',
-        importance: Importance.high,
-        priority: Priority.high,
-      ),
-      iOS: DarwinNotificationDetails(),
-    ),
-  );
-    }
+    if (type != 'report') return;
+    final saved = await _inbox?.addFromMessage(message) ?? false;
+    if (!saved) return;
+    await _showReportNotification(plugin, message);
   }
 
-  /// 알림 탭 시 화면 이동
   void _handleTap(RemoteMessage message) {
-    // 9단계에서 알림 탭 시 화면 이동
+    if (message.data['type'] != 'report') return;
+    _inbox?.addFromMessage(message);
   }
 }

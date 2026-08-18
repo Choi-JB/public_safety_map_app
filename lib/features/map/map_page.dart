@@ -150,6 +150,8 @@ class _MapPageState extends State<MapPage>
   bool _gridMenu = false;
   bool _accidentMenu = false;
 
+  DateTime? _lastBackPress;
+
   void _closeFilterMenus() {
     if (!_nearbyMenu && !_gridMenu && !_accidentMenu) return;
     setState(() {
@@ -1929,9 +1931,29 @@ class _MapPageState extends State<MapPage>
     }
     final fabBottom = railH + panelH + fabNavGap;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9),
-      body: Stack(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        final now = DateTime.now();
+        if (_lastBackPress != null &&
+            now.difference(_lastBackPress!) < const Duration(seconds: 2)) {
+          SystemNavigator.pop();
+          return;
+        }
+        _lastBackPress = now;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('버튼을 한 번 더 누르면 종료됩니다'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF1F5F9),
+        body: Stack(
         children: [
           // 맵
           Positioned.fill(
@@ -2623,6 +2645,7 @@ class _MapPageState extends State<MapPage>
             ),
         ],
       ),
+    ),
     );
   }
 
