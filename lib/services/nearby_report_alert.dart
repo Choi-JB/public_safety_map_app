@@ -9,6 +9,7 @@ import '../core/geo/geo_utils.dart';
 import '../core/geo/region_code.dart';
 import '../data/models/models.dart';
 import '../data/repositories/map_repository.dart';
+import '../providers/fcm_inbox_store.dart';
 import 'guidance_notification.dart';
 
 const _accidentTypeLabel = {
@@ -46,6 +47,7 @@ class NearbyReportAlert {
   FlutterLocalNotificationsPlugin get notificationsPlugin => _plugin;
 
   GuidanceNotification? guidanceNotification;
+  FcmInboxStore? inbox;
 
   SharedPreferences? _prefs;
 
@@ -523,6 +525,14 @@ class NearbyReportAlert {
         iOS: DarwinNotificationDetails(threadIdentifier: groupKey),
       ),
     );
+    await _logInbox(
+      id: 'nearby-report-${r.id}',
+      title: type,
+      body: body,
+      lat: r.lat,
+      lng: r.lng,
+      reportId: r.id,
+    );
   }
 
   Future<void> _showReportSummary(List<_NearReport> active) async {
@@ -592,6 +602,13 @@ class NearbyReportAlert {
         iOS: DarwinNotificationDetails(threadIdentifier: accidentGroupKey),
       ),
     );
+    await _logInbox(
+      id: 'nearby-accident-${z.id}',
+      title: '위험구간 · $typeLabel',
+      body: body,
+      lat: z.lat ?? (z.path.isNotEmpty ? z.path.first.lat : null),
+      lng: z.lng ?? (z.path.isNotEmpty ? z.path.first.lng : null),
+    );
   }
 
   Future<void> _showAccidentSummary(List<_NearAccident> active) async {
@@ -637,6 +654,29 @@ class NearbyReportAlert {
   String _clip(String s, int max) {
     if (s.length <= max) return s;
     return '${s.substring(0, max)}…';
+  }
+
+  Future<void> _logInbox({
+    required String id,
+    required String title,
+    String? body,
+    double? lat,
+    double? lng,
+    int? reportId,
+  }) async {
+    final store = inbox;
+    if (store == null) return;
+    await store.addItem(
+      AppNotification(
+        id: id,
+        title: title,
+        body: body,
+        lat: lat,
+        lng: lng,
+        reportId: reportId,
+        createdAt: DateTime.now().toIso8601String(),
+      ),
+    );
   }
 
   void dispose() {
