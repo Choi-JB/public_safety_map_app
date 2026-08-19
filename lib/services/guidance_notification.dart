@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import '../data/models/models.dart';
 import '../data/models/route_models.dart';
+import '../providers/fcm_inbox_store.dart';
 import '../providers/nav_provider.dart';
 
 /// 보행 안내 ongoing 알림 (턴 문구 + 「안내 종료」액션).
@@ -17,6 +19,7 @@ class GuidanceNotification {
   static const String openPayload = 'nav:open';
 
   FlutterLocalNotificationsPlugin? _plugin;
+  FcmInboxStore? inbox;
   VoidCallback? onStopRequested;
 
   String? _lastTitle;
@@ -74,6 +77,16 @@ class GuidanceNotification {
     _lastTitle = title;
     _lastBody = body;
     await _show(title: title, body: body, alertOnce: firstArrival);
+    if (firstArrival) {
+      await inbox?.addItem(
+        AppNotification(
+          id: 'nav-arrival-${DateTime.now().millisecondsSinceEpoch}',
+          title: title,
+          body: body,
+          createdAt: DateTime.now().toIso8601String(),
+        ),
+      );
+    }
   }
 
   Future<void> _show({
