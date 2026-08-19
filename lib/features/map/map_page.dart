@@ -2103,11 +2103,14 @@ class _MapPageState extends State<MapPage>
                     Marker(
                       point: _longPressPoint!,
                       width: 280,
-                      height: 128,
+                      height: 168,
                       alignment: Alignment.bottomCenter,
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 30),
-                        child: LongPressMapMenu(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.bottomCenter,
+                          child: LongPressMapMenu(
                           address: _longPressAddress,
                           loading: _longPressAddressLoading,
                           onOrigin: _onLongPressSetOrigin,
@@ -2118,6 +2121,7 @@ class _MapPageState extends State<MapPage>
                             unawaited(_onLongPressCopyAddress());
                           },
                           onClose: _dismissLongPressMenu,
+                          ),
                         ),
                       ),
                     ),
