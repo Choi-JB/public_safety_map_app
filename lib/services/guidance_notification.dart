@@ -5,6 +5,7 @@ import '../data/models/models.dart';
 import '../data/models/route_models.dart';
 import '../providers/fcm_inbox_store.dart';
 import '../providers/nav_provider.dart';
+import 'nearby_report_alert.dart';
 
 /// 보행 안내 ongoing 알림 (턴 문구 + 「안내 종료」액션).
 /// [FlutterLocalNotificationsPlugin] 은 NearbyReportAlert 와 공유한다.
@@ -52,6 +53,10 @@ class GuidanceNotification {
 
   Future<void> syncFromNav(NavProvider nav) async {
     if (!nav.guiding) {
+      await clear();
+      return;
+    }
+    if (!await NearbyReportAlert.isGlobalNotificationsEnabled()) {
       await clear();
       return;
     }

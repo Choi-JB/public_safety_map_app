@@ -8,6 +8,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../core/network/api_client.dart';
 import '../firebase_options.dart';
 import '../providers/fcm_inbox_store.dart';
+import 'nearby_report_alert.dart';
 
 const _fcmChannelId = 'fcm_push';
 const _fcmChannelName = '서버 알림';
@@ -145,6 +146,8 @@ class FcmService {
   void _handleForeground(RemoteMessage message) async {
     final plugin = _plugin;
     if (plugin == null) return;
+
+    if (!await NearbyReportAlert.isGlobalNotificationsEnabled()) return;
 
     final type = message.data['type'] as String?;
 

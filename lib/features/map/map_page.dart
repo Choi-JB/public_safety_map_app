@@ -45,7 +45,7 @@ const double _myLocationZoom = 17;
 enum MapPanelTab { grid, event, report, myReport }
 
 String _accidentChipLabel(MapProvider map) {
-  if (!map.accidentZonesVisible) return '위험구간 · 숨김';
+  if (!map.accidentZonesVisible) return '위험구간';
   final n = map.visibleAccidentTypes.length;
   if (n == kAccidentZoneTypes.length) return '위험구간';
   if (n == 0) return '위험구간 · 없음';
@@ -144,6 +144,7 @@ class _MapPageState extends State<MapPage>
 
   int? _selectedReportId;
   int? _selectedEventId;
+  Object? _selectedMyReportId;
 
   List<MyReport> _myReports = [];
   bool _myLoading = false;
@@ -1529,14 +1530,15 @@ class _MapPageState extends State<MapPage>
   }
 
   double _resolvePanelHeight(double screenH, MapProvider map) {
-    final open = _defaultOpenHeight(screenH, map);
-    // 드래그 중만 중간 높이 미리보기, 아니면 접힘/펼침 두 단
+    final maxH = _maxPanelHeight(screenH);
+    // 드래그 중엔 접힘~최대 사이 어디든 미리보기 (기본 펼침 지점을 넘어 더 끌어올릴 수 있음)
     if (_panelDragging) {
       final h = _panelHeightPx ?? _collapsedBarH;
-      return h.clamp(_collapsedBarH, open);
+      return h.clamp(_collapsedBarH, maxH);
     }
     if (!_panelExpanded) return _collapsedBarH;
-    return open;
+    final resting = _panelHeightPx ?? _defaultOpenHeight(screenH, map);
+    return resting.clamp(_collapsedBarH, maxH);
   }
 
   void _setPanelHeight(double h, {required double openH, bool drag = false}) {
@@ -1582,11 +1584,11 @@ class _MapPageState extends State<MapPage>
     MapProvider map,
   ) {
     _onUserActivity();
-    final open = _defaultOpenHeight(screenH, map);
+    final maxH = _maxPanelHeight(screenH);
     final cur = _panelHeightPx ??
-        (_panelExpanded ? open : _collapsedBarH);
-    // 위로 드래그(dy < 0) → 확대. 높이는 접힘~기본 펼침 사이만
-    _setPanelHeight(cur - details.delta.dy, openH: open, drag: true);
+        (_panelExpanded ? _defaultOpenHeight(screenH, map) : _collapsedBarH);
+    // 위로 드래그(dy < 0) → 확대. 기본 펼침 지점을 넘어 최대까지 끌어올릴 수 있음
+    _setPanelHeight(cur - details.delta.dy, openH: maxH, drag: true);
   }
 
   void _onPanelDragEnd(
@@ -1595,24 +1597,30 @@ class _MapPageState extends State<MapPage>
     MapProvider map,
   ) {
     _onUserActivity();
-    final open = _defaultOpenHeight(screenH, map);
+    final defaultH = _defaultOpenHeight(screenH, map);
+    final maxH = _maxPanelHeight(screenH);
     final cur = _panelHeightPx ?? _collapsedBarH;
     final v = details.primaryVelocity ?? 0;
-    final mid = (_collapsedBarH + open) / 2;
 
-    // 중간 유지 없음 — 접힘 또는 기본 펼침만
-    final bool expand;
+    // 접힘 / 기본 펼침(42%) / 최대 펼침 — 세 단계 스냅
+    double target;
     if (v > 700) {
-      expand = false; // 아래로 플링
+      // 아래로 플링 — 한 단계 아래로
+      target = cur > defaultH ? defaultH : _collapsedBarH;
     } else if (v < -700) {
-      expand = true; // 위로 플링
+      // 위로 플링 — 한 단계 위로
+      target = cur < defaultH ? defaultH : maxH;
     } else {
-      expand = cur >= mid; // 절반 넘기면 펼침
+      // 가장 가까운 스냅 지점으로
+      final points = [_collapsedBarH, defaultH, maxH];
+      target = points.reduce(
+        (a, b) => (cur - a).abs() <= (cur - b).abs() ? a : b,
+      );
     }
 
     setState(() {
       _panelDragging = false;
-      _panelHeightPx = expand ? open : _collapsedBarH;
+      _panelHeightPx = target;
     });
   }
 
@@ -1800,6 +1808,7 @@ class _MapPageState extends State<MapPage>
 
   void _onSelectMyReportFromPanel(MyReport r, MapProvider map) {
     _onMapUserGesture();
+    setState(() => _selectedMyReportId = r.id);
     final id = r.id is int ? r.id as int : int.tryParse('${r.id}');
     if (id != null) {
       for (final item in map.reports) {
@@ -1827,6 +1836,7 @@ class _MapPageState extends State<MapPage>
       map: map,
       selectedReportId: _selectedReportId,
       selectedEventId: _selectedEventId,
+      selectedMyReportId: _selectedMyReportId,
       myReports: _myReports,
       myLoading: _myLoading,
       myError: _myError,
@@ -2218,7 +2228,7 @@ class _MapPageState extends State<MapPage>
                                   child: CctvClusterBadge(count: p.count),
                                 )
                               : Icon(
-                                  _infraIcon(p.item?.type),
+                                  infraMarkerIcon(p.item?.type),
                                   color: infraMarkerColor(p.item?.type),
                                   size: 20,
                                 ),
@@ -2372,21 +2382,12 @@ class _MapPageState extends State<MapPage>
                     child: Row(
                       children: [
                         _TopChip(
-                          label: _followMe ? '내 위치' : '내 위치',
-                          onTap: _myLocation,
-                          icon: _followMe
-                              ? Icons.gps_fixed
-                              : Icons.my_location,
-                          selected: _followMe,
-                        ),
-                        const SizedBox(width: 6),
-                        _TopChip(
                           label: map.infraVisible
                               ? (map.visibleInfraTypes.length ==
                                       kInfraTypes.length
                                   ? '인프라'
                                   : '인프라 · ${map.visibleInfraTypes.length}종')
-                              : '인프라 · 숨김',
+                              : '인프라',
                           selected: map.infraVisible,
                           onTap: () {
                             _onUserActivity();
@@ -2407,7 +2408,7 @@ class _MapPageState extends State<MapPage>
                               ? (map.visibleGrades.length == kSafetyGrades.length
                                   ? '격자'
                                   : '격자 · ${map.visibleGrades.length}종')
-                              : '격자 · 숨김',
+                              : '격자',
                           selected: map.gridsVisible,
                           onTap: () {
                             _onUserActivity();
@@ -2457,6 +2458,88 @@ class _MapPageState extends State<MapPage>
                       map: map,
                       onToggle: _toggleAccidentZonesUi,
                     ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Column(
+                        children: [
+                          Consumer<NearbyMonitor>(
+                            builder: (context, monitor, _) {
+                              final on = monitor.enabled;
+                              return Tooltip(
+                                message: on ? '주변알림 ON' : '주변알림',
+                                child: Material(
+                                  elevation: 3,
+                                  shape: const CircleBorder(),
+                                  color: Colors.white,
+                                  shadowColor: Colors.black38,
+                                  child: InkWell(
+                                    customBorder: const CircleBorder(),
+                                    onTap: monitor.busy
+                                        ? null
+                                        : () {
+                                            _closeFilterMenus();
+                                            _onUserActivity();
+                                            unawaited(_toggleNearbyMonitor());
+                                          },
+                                    child: SizedBox(
+                                      width: 40,
+                                      height: 40,
+                                      child: monitor.busy
+                                          ? const Padding(
+                                              padding: EdgeInsets.all(10),
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: MapUiColors.accent,
+                                              ),
+                                            )
+                                          : Icon(
+                                              on
+                                                  ? Icons.notifications_active
+                                                  : Icons.notifications_none,
+                                              color: on
+                                                  ? MapUiColors.accent
+                                                  : const Color(0xFF0F172A),
+                                              size: 20,
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          Material(
+                            elevation: 3,
+                            shape: const CircleBorder(),
+                            color: Colors.white,
+                            shadowColor: Colors.black38,
+                            child: InkWell(
+                              customBorder: const CircleBorder(),
+                              onTap: () {
+                                _closeFilterMenus();
+                                if (!auth.isLoggedIn) {
+                                  context.push('/login');
+                                  return;
+                                }
+                                context.push('/report/create', extra: _myPos);
+                              },
+                              child: const SizedBox(
+                                width: 40,
+                                height: 40,
+                                child: Icon(
+                                  Icons.add_location_alt,
+                                  color: Color(0xFF0F172A),
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                   if (map.error != null)
                     Container(
                       margin: const EdgeInsets.only(top: 6),
@@ -2483,12 +2566,12 @@ class _MapPageState extends State<MapPage>
             left: 0,
             right: 0,
             bottom: railH,
-            child: AnimatedSize(
+            child: AnimatedContainer(
               duration: _panelDragging
                   ? Duration.zero
                   : const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
-              alignment: Alignment.bottomCenter,
+              height: panelH,
               child: _buildDockedBottomStack(
                 nav: nav,
                 map: map,
@@ -2499,58 +2582,7 @@ class _MapPageState extends State<MapPage>
             ),
           ),
 
-          // 주변알림 FAB — 제보 반대편(좌측), 패널·길찾기 시트와 함께 상승
-          AnimatedPositioned(
-            duration: _panelDragging
-                ? Duration.zero
-                : const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            left: 12,
-            bottom: fabBottom,
-            child: Consumer<NearbyMonitor>(
-              builder: (context, monitor, _) {
-                final on = monitor.enabled;
-                return Tooltip(
-                  message: on ? '주변알림 ON' : '주변알림',
-                  child: Material(
-                    elevation: 4,
-                    shape: const CircleBorder(),
-                    color:Colors.white,
-                    shadowColor: Colors.black38,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: monitor.busy
-                          ? null
-                          : () {
-                              _closeFilterMenus();
-                              _onUserActivity();
-                              unawaited(_toggleNearbyMonitor());
-                            },
-                      child: SizedBox(
-                        width: 48,
-                        height: 48,
-                        child: monitor.busy
-                            ? Padding(
-                                padding: const EdgeInsets.all(12),
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: MapUiColors.accent,
-                                ),
-                              )
-                            : Icon(
-                          on ? Icons.notifications_active : Icons.notifications_none,
-                          color: on ? MapUiColors.accent : const Color(0xFF0F172A),
-                          size: 22,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // 제보 FAB — 패널·길찾기 시트 우측 위
+          // 내 위치 FAB — 네이버 지도 스타일 (지도 우측 하단, 아이콘 전용 원형)
           AnimatedPositioned(
             duration: _panelDragging
                 ? Duration.zero
@@ -2558,41 +2590,26 @@ class _MapPageState extends State<MapPage>
             curve: Curves.easeOutCubic,
             right: 12,
             bottom: fabBottom,
-            child: Material(
-              elevation: 4,
-              borderRadius: BorderRadius.circular(28),
-              color: Colors.white,
-              shadowColor: Colors.black38,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(28),
-                onTap: () {
-                  _closeFilterMenus();
-                  if (!auth.isLoggedIn) {
-                    context.push('/login');
-                    return;
-                  }
-                  context.push('/report/create', extra: _myPos);
-                },
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.add_location_alt,
-                        color: Color(0xFF0F172A),
-                        size: 20,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        '제보',
-                        style: TextStyle(
-                          color: Color(0xFF0F172A),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
+            child: Tooltip(
+              message: '내 위치',
+              child: Material(
+                elevation: 4,
+                shape: const CircleBorder(),
+                color: Colors.white,
+                shadowColor: Colors.black38,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: _myLocation,
+                  child: SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: Icon(
+                      _followMe ? Icons.gps_fixed : Icons.my_location,
+                      color: _followMe
+                          ? MapUiColors.accent
+                          : const Color(0xFF0F172A),
+                      size: 22,
+                    ),
                   ),
                 ),
               ),
@@ -2621,25 +2638,29 @@ class _MapPageState extends State<MapPage>
                     child: Row(
             children: [
                         _RailTab(
-                          icon: Icons.grid_on,
+                          iconSelected: Icons.grid_view,
+                          iconUnselected: Icons.grid_view_outlined,
                           label: '격자',
                           selected: _panelTab == MapPanelTab.grid,
                           onTap: () => _openPanel(MapPanelTab.grid),
                         ),
                         _RailTab(
-                          icon: Icons.radio_button_checked,
+                          iconSelected: Icons.event,
+                          iconUnselected: Icons.event_outlined,
                           label: '행사',
                           selected: _panelTab == MapPanelTab.event,
                           onTap: () => _openPanel(MapPanelTab.event),
                         ),
                         _RailTab(
-                          icon: Icons.priority_high,
+                          iconSelected: Icons.report,
+                          iconUnselected: Icons.report_outlined,
                           label: '제보',
                           selected: _panelTab == MapPanelTab.report,
                           onTap: () => _openPanel(MapPanelTab.report),
                         ),
                         _RailTab(
-                          icon: Icons.person_outline,
+                          iconSelected: Icons.person,
+                          iconUnselected: Icons.person_outline,
                           label: '내 제보',
                           selected: _panelTab == MapPanelTab.myReport,
                           onTap: () => _openPanel(MapPanelTab.myReport),
@@ -2685,20 +2706,6 @@ class _MapPageState extends State<MapPage>
     ];
   }
 
-  IconData _infraIcon(String? type) {
-    switch (type) {
-      case 'CCTV':
-        return Icons.videocam;
-      case '경찰서':
-        return Icons.local_police;
-      case '소방서':
-        return Icons.local_fire_department;
-      case '편의점':
-        return Icons.store;
-      default:
-        return Icons.place;
-    }
-  }
 }
 
 // --- UI bits ---
@@ -2716,7 +2723,6 @@ class _TopChip extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.selected = false,
-    this.icon,
     this.onLongPress,
   });
 
@@ -2724,7 +2730,6 @@ class _TopChip extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
   final bool selected;
-  final IconData? icon;
 
   static const _textOn = Color(0xFF0F172A);
   static const _borderOff = Color(0xFFCBD5E1);
@@ -2740,16 +2745,16 @@ class _TopChip extends StatelessWidget {
       shadowColor: Colors.black38,
       surfaceTintColor: Colors.transparent,
       color: Colors.transparent,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(999),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(999),
         child: Ink(
           decoration: BoxDecoration(
             color: selected ? _bgOn : Colors.white,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(999),
             border: Border.all(color: borderColor, width: selected ? 1.5 : 1),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -2765,10 +2770,6 @@ class _TopChip extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (icon != null) ...[
-                    Icon(icon),
-                    const SizedBox(width: 4),
-                  ],
                   Text(label),
                 ],
               ),
@@ -2828,6 +2829,14 @@ class _NearbyFilterRow extends StatelessWidget {
             ),
             for (final t in kInfraTypes)
               FilterChip(
+                avatar: Icon(
+                  infraMarkerIcon(t),
+                  size: 16,
+                  color: map.visibleInfraTypes.contains(t)
+                      ? MapUiColors.accent
+                      : const Color(0xFF64748B),
+                ),
+                showCheckmark: false,
                 label: Text(t),
                 selected: map.visibleInfraTypes.contains(t),
                 onSelected: (_) =>
@@ -3049,30 +3058,32 @@ class _HeadingChevronPainter extends CustomPainter {
 
 class _RailTab extends StatelessWidget {
   const _RailTab({
-    required this.icon,
+    required this.iconSelected,
+    required this.iconUnselected,
     required this.label,
     required this.selected,
     required this.onTap,
   });
 
-  final IconData icon;
+  final IconData iconSelected;
+  final IconData iconUnselected;
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  static const _idle = Color(0xFF0F172A);
-  static const _active = Color(0xFF2563EB);
+  static const _selectedColor = Colors.black;
+  static const _unselectedColor = Color(0xFF94A3B8);
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? _active : _idle;
+    final color = selected ? _selectedColor : _unselectedColor;
     return Expanded(
       child: InkWell(
         onTap: onTap,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: color, size: 22),
+            Icon(selected ? iconSelected : iconUnselected, color: color, size: 22),
             const SizedBox(height: 2),
             Text(
               label,
@@ -3096,6 +3107,7 @@ class _PanelBody extends StatelessWidget {
     required this.map,
     required this.selectedReportId,
     required this.selectedEventId,
+    required this.selectedMyReportId,
     required this.myReports,
     required this.myLoading,
     required this.myError,
@@ -3114,6 +3126,7 @@ class _PanelBody extends StatelessWidget {
   final MapProvider map;
   final int? selectedReportId;
   final int? selectedEventId;
+  final Object? selectedMyReportId;
   final List<MyReport> myReports;
   final bool myLoading;
   final String? myError;
@@ -3203,7 +3216,7 @@ class _PanelBody extends StatelessWidget {
       elevation: 10,
       color: Colors.white,
       surfaceTintColor: Colors.transparent,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
       clipBehavior: Clip.antiAlias,
       child: body,
     );
@@ -3277,10 +3290,17 @@ class _PanelBody extends StatelessWidget {
           itemCount: myReports.length,
           itemBuilder: (_, i) {
             final r = myReports[i];
+            final createdAt = r.createdAt;
+            final meta = (createdAt == null || createdAt.isEmpty)
+                ? null
+                : createdAt.replaceFirst('T', ' ');
             return ReportListCard(
-              type: r.type ?? '제보',
-              description: r.description ?? '',
-              meta: r.createdAt?.split('T').first,
+              type: '[${r.type ?? '제보'}] ${r.description ?? ''}',
+              description: '',
+              meta: meta != null && meta.length >= 16
+                  ? meta.substring(0, 16)
+                  : meta,
+              selected: r.id == selectedMyReportId,
               onTap: () => onSelectMyReport(r),
             );
           },
@@ -3336,17 +3356,36 @@ class _GridPanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
-              _gradeLine(grade),
-              const SizedBox(height: 8),
-              Text(
-                '안전등급: $grade · 인프라 ${d.infraCount ?? 0}',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF334155)),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'CCTV ${stats['CCTV'] ?? 0} · 경찰서 ${stats['경찰서'] ?? 0} · '
-                '소방서 ${stats['소방서'] ?? 0} · 편의점 ${stats['편의점'] ?? 0}',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _gradeLine(grade),
+                    const SizedBox(height: 8),
+                    Text(
+                      '인프라 ${d.infraCount ?? 0}개',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF334155),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'CCTV ${stats['CCTV'] ?? 0} · 경찰서 ${stats['경찰서'] ?? 0} · '
+                      '소방서 ${stats['소방서'] ?? 0} · 편의점 ${stats['편의점'] ?? 0}',
+                      style:
+                          const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 14),
               const Text(
@@ -3365,10 +3404,20 @@ class _GridPanel extends StatelessWidget {
               else
                 ...d.activeReports.map(
                   (r) => Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Text(
-                      '[${r['type'] ?? '제보'}] ${r['description'] ?? ''}',
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF334155)),
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Container(
+                      width: double.infinity,
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                      ),
+                      child: Text(
+                        '[${r['type'] ?? '제보'}] ${r['description'] ?? ''}',
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF334155)),
+                      ),
                     ),
                   ),
                 ),
@@ -3382,35 +3431,57 @@ class _GridPanel extends StatelessWidget {
                 ...d.tags.map((t) {
                   final max =
                       d.tags.map((x) => x.count).fold<int>(1, (a, b) => a > b ? a : b);
+                  final ratio = (t.count / max).clamp(0.12, 1.0);
                   return Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 64,
-                          child: Text(t.name, style: const TextStyle(fontSize: 12)),
-                        ),
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: (t.count / max).clamp(0.05, 1),
-                              minHeight: 8,
-                              backgroundColor: const Color(0xFFE2E8F0),
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Stack(
+                        children: [
+                          Container(
+                            height: 36,
+                            color: const Color(0xFFF1F5F9),
+                          ),
+                          FractionallySizedBox(
+                            widthFactor: ratio,
+                            child: Container(
+                              height: 36,
                               color: const Color(0xFFA5F3FC),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${t.count}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF0E7490),
-                            fontWeight: FontWeight.w600,
+                          Positioned.fill(
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '"${t.name}"',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${t.count}',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      color: Color(0xFF0E7490),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   );
                 }),
@@ -3430,14 +3501,24 @@ class _GridPanel extends StatelessWidget {
                     if (comment.isNotEmpty) comment,
                   ].join(' · ');
                   return Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Text(
-                      line.isEmpty ? '피드백' : line,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF334155),
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Container(
+                      width: double.infinity,
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                      ),
+                      child: Text(
+                        line.isEmpty ? '피드백' : line,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF334155),
+                        ),
                       ),
                     ),
                   );
