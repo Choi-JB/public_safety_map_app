@@ -70,6 +70,9 @@ class _MapPageState extends State<MapPage>
   MapController _mapController = MapController();
   final _searchCtrl = TextEditingController();
   bool _booted = false;
+  /// 권위 있는 카메라 이동(_loadAround)마다 증가 — 뒤늦게 도착한 GPS 응답이
+  /// 그 사이 일어난 다른 이동(포커스 등)을 덮어쓰지 않도록 막는 세대 토큰.
+  int _cameraOpGen = 0;
   bool _searching = false;
   /// 롱프레스로 고른 도착 좌표 (길찾기 시 Nominatim 재검색 생략)
   LatLng? _pinnedNavDest;
@@ -220,9 +223,17 @@ class _MapPageState extends State<MapPage>
     }
   }
 
+  /// 포커스가 대기 중인데 라우트 전환이 아직 안 끝나서 `_isMapRouteActive`가
+  /// false로 나오는 경우 재시도하는 횟수 — go_router의 routerDelegate 리스너는
+  /// go() 호출 시점에 한 번만 알려주고, 실제 라우트 전환이 끝난 뒤에는 다시
+  /// 알려주지 않아서 다음 프레임에 직접 재확인해야 한다(안 하면 MapProvider의
+  /// 5초 안전장치 타임아웃이 만료될 때까지 포커스 이동이 멈춰 있었음).
+  int _focusRecheckAttempts = 0;
+
   void _onRouteChanged() {
     if (!mounted) return;
     if (_isMapRouteActive) {
+      _focusRecheckAttempts = 0;
       final map = context.read<MapProvider>();
       final focusing = map.pendingFocus != null || map.mapFocusing;
       if (focusing) {
@@ -235,6 +246,13 @@ class _MapPageState extends State<MapPage>
     } else {
       // 다른 화면: idle 정지 (6-A)
       _idleFollowTimer?.cancel();
+
+      final map = context.read<MapProvider>();
+      if ((map.pendingFocus != null || map.mapFocusing) &&
+          _focusRecheckAttempts < 20) {
+        _focusRecheckAttempts++;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _onRouteChanged());
+      }
     }
   }
 
@@ -1002,62 +1020,66 @@ class _MapPageState extends State<MapPage>
     if (_booted) return;
     _booted = true;
 
-    // 기본값: 서울 → 가능하면 GPS로 교체
-    // cameraCenter가 있으면(마이페이지 포커스) 카메라는 그쪽으로, GPS 대기는 생략
-    var c = cameraCenter ??
+    // 기본값: 마지막으로 보던 위치(MapProvider.hydrateLastPosition, 없으면 서울)
+    // cameraCenter가 있으면(마이페이지 포커스) 카메라는 그쪽으로.
+    // GPS는 어느 쪽이든 기다리지 않고 바로 데이터를 그린 뒤 백그라운드에서 보정한다.
+    final c = cameraCenter ??
         coerceLatLng(
           context.read<MapProvider>().center.latitude,
           context.read<MapProvider>().center.longitude,
         );
-    var z = cameraZoom ?? (cameraCenter != null ? 16.0 : 14.0);
-
-    if (cameraCenter != null) {
-      if (!mounted) return;
-      context.read<MapProvider>().setCenter(c);
-      context.read<MapProvider>().setZoom(z);
-      _safeMapMove(c, z);
-      await _loadAround(c, z);
-      // 내 위치 마커는 백그라운드로 (포커스 이동을 막지 않음)
-      unawaited(_tryStartLocationTracking(requestPermission: false));
-      return;
-    }
-
-    final hasLocation =
-        await _ensureLocationPermission(request: true);
-    if (hasLocation && mounted) {
-      try {
-        final pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 10),
-          ),
-        );
-        final p = tryLatLng(pos.latitude, pos.longitude);
-        if (p != null) {
-          c = p;
-          z = _myLocationZoom;
-          if (mounted) {
-            _snapMyLocation(
-              p,
-              headingRad: _resolveHeadingRad(pos, p),
-            );
-          }
-        }
-      } catch (_) {
-        // 타임아웃·실패 시 기본 중심 유지
-      }
-      // 실시간 마커 갱신
-      await _tryStartLocationTracking(requestPermission: false);
-    }
+    final z = cameraZoom ?? (cameraCenter != null ? 16.0 : 14.0);
 
     if (!mounted) return;
     context.read<MapProvider>().setCenter(c);
     context.read<MapProvider>().setZoom(z);
     _safeMapMove(c, z);
     await _loadAround(c, z);
+
+    if (cameraCenter != null) {
+      // 포커스 이동: 내 위치 마커만 백그라운드로 (카메라는 건드리지 않음)
+      unawaited(_tryStartLocationTracking(requestPermission: false));
+    } else {
+      // 일반 진입: GPS로 실제 위치를 백그라운드에서 확인 후 도착하면 보정
+      unawaited(_resolveInitialGpsFix());
+    }
+  }
+
+  /// `_initialLoad`가 이미 마지막 위치(또는 기본값)로 화면을 띄운 뒤,
+  /// GPS로 실제 현재 위치를 확인해 오면 그때 카메라를 보정한다.
+  /// 그 사이 다른 카메라 이동(포커스 등)이 있었으면 `_cameraOpGen`이 달라져 조용히 무시된다.
+  Future<void> _resolveInitialGpsFix() async {
+    final myGen = _cameraOpGen;
+    final hasLocation = await _ensureLocationPermission(request: true);
+    if (!hasLocation || !mounted) return;
+
+    Position pos;
+    try {
+      pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+    } catch (_) {
+      // 타임아웃·실패 — 이미 화면엔 마지막/기본 위치가 떠 있으므로 조용히 포기
+      return;
+    }
+
+    final p = tryLatLng(pos.latitude, pos.longitude);
+    if (p == null || !mounted) return;
+    if (myGen != _cameraOpGen) return; // 그 사이 다른 카메라 이동 발생 — GPS 결과 폐기
+
+    _snapMyLocation(p, headingRad: _resolveHeadingRad(pos, p));
+    _safeMapMove(p, _myLocationZoom);
+    await _loadAround(p, _myLocationZoom);
+    if (!mounted) return;
+    // 이후 위치 스트림(파란 점 갱신)만 이어받음 — 첫 fix는 이미 위에서 처리했으므로 중복 없음
+    unawaited(_tryStartLocationTracking(requestPermission: false));
   }
 
   Future<void> _loadAround(LatLng center, double zoom) async {
+    _cameraOpGen++;
     final safeCenter = tryLatLng(center.latitude, center.longitude);
     if (safeCenter == null) return;
 

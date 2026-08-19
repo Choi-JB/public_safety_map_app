@@ -1,9 +1,13 @@
+import '../../core/geo/geo_utils.dart';
 import '../../core/network/api_client.dart';
+import '../local/static_data_local_store.dart';
 import '../models/models.dart';
 
 class MapRepository {
-  MapRepository(this._api);
+  MapRepository(this._api, {StaticDataLocalStore? localStore})
+      : _local = localStore ?? StaticDataLocalStore.instance;
   final ApiClient _api;
+  final StaticDataLocalStore _local;
 
   Future<List<GridItem>> fetchGrids({
     required double swLat,
@@ -11,6 +15,14 @@ class MapRepository {
     required double neLat,
     required double neLng,
   }) async {
+    final local = await _local.queryGridsInBounds(
+      swLat: swLat,
+      swLng: swLng,
+      neLat: neLat,
+      neLng: neLng,
+    );
+    if (local.isNotEmpty) return local;
+
     final data = await _api.get<dynamic>(
       '/grids',
       query: {
@@ -76,6 +88,20 @@ class MapRepository {
     required int radiusM,
     String? type,
   }) async {
+    final local = await _local.queryInfraNear(
+      lat: lat,
+      lng: lng,
+      radiusM: radiusM,
+      type: type,
+    );
+    if (local.isNotEmpty) {
+      final radiusKm = radiusM / 1000;
+      return local.where((i) {
+        if (i.lat == null || i.lng == null) return false;
+        return distKm(lat, lng, i.lat!, i.lng!) <= radiusKm;
+      }).toList();
+    }
+
     final data = await _api.get<dynamic>(
       '/infrastructures',
       query: {
