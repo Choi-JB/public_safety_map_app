@@ -472,6 +472,7 @@ class MapProvider extends ChangeNotifier {
   /// 지도 이동 후 마이페이지 재진입 시 상세 시트 복원
   int? _pendingReopenReportId;
   int? _pendingReopenFeedbackId;
+  bool _pendingReopenNotifications = false;
 
   MapFocusTarget? get pendingFocus => _pendingFocus;
 
@@ -497,18 +498,30 @@ class MapProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setPendingMypageReopen({int? reportId, int? feedbackId}) {
+  void setPendingMypageReopen({
+    int? reportId,
+    int? feedbackId,
+    bool notifications = false,
+  }) {
     _pendingReopenReportId = reportId;
     _pendingReopenFeedbackId = feedbackId;
+    _pendingReopenNotifications = notifications;
   }
 
-  ({int? reportId, int? feedbackId})? takePendingMypageReopen() {
+  ({int? reportId, int? feedbackId, bool notifications})?
+      takePendingMypageReopen() {
     final reportId = _pendingReopenReportId;
     final feedbackId = _pendingReopenFeedbackId;
-    if (reportId == null && feedbackId == null) return null;
+    final notifications = _pendingReopenNotifications;
+    if (reportId == null && feedbackId == null && !notifications) return null;
     _pendingReopenReportId = null;
     _pendingReopenFeedbackId = null;
-    return (reportId: reportId, feedbackId: feedbackId);
+    _pendingReopenNotifications = false;
+    return (
+      reportId: reportId,
+      feedbackId: feedbackId,
+      notifications: notifications,
+    );
   }
 
   int _radiusForZoom(double z) {

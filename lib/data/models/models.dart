@@ -13,6 +13,18 @@ int? _asInt(dynamic v) {
   return null;
 }
 
+bool? _asBool(dynamic v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  if (v is String) {
+    final s = v.toLowerCase().trim();
+    if (s == 'true' || s == '1' || s == 'y' || s == 'yes') return true;
+    if (s == 'false' || s == '0' || s == 'n' || s == 'no') return false;
+  }
+  return null;
+}
+
 // --- Auth ---
 
 class AuthUser {
@@ -381,5 +393,90 @@ class FeedbackTag {
         id: _asInt(j['id']) ?? 0,
         name: j['name']?.toString() ?? '',
       );
+}
+
+/// 기기에 저장한 FCM 알림
+class AppNotification {
+  const AppNotification({
+    required this.id,
+    required this.title,
+    this.body,
+    this.lat,
+    this.lng,
+    this.reportId,
+    this.gridId,
+    this.createdAt,
+    this.isRead = false,
+  });
+
+  final String id;
+  final String title;
+  final String? body;
+  final double? lat;
+  final double? lng;
+  final int? reportId;
+  final int? gridId;
+  final String? createdAt;
+  final bool isRead;
+
+  AppNotification copyWith({bool? isRead}) => AppNotification(
+        id: id,
+        title: title,
+        body: body,
+        lat: lat,
+        lng: lng,
+        reportId: reportId,
+        gridId: gridId,
+        createdAt: createdAt,
+        isRead: isRead ?? this.isRead,
+      );
+
+  factory AppNotification.fromJson(Map<String, dynamic> j) {
+    final titleRaw = (j['title'] ?? j['subject'])?.toString().trim();
+    final type = j['type']?.toString();
+    final title = (titleRaw != null && titleRaw.isNotEmpty)
+        ? titleRaw
+        : switch (type) {
+            'report' => '새로운 제보가 등록되었습니다',
+            'accident' || 'accident_zone' => '주변 위험구간 알림',
+            _ => '알림',
+          };
+    final bodyRaw = (j['body'] ??
+            j['content'] ??
+            j['message'] ??
+            j['description'])
+        ?.toString()
+        .trim();
+    return AppNotification(
+      id: '${j['id'] ?? ''}',
+      title: title,
+      body: (bodyRaw == null || bodyRaw.isEmpty) ? null : bodyRaw,
+      lat: _asDouble(j['lat']) ?? _asDouble(j['latitude']),
+      lng: _asDouble(j['lng']) ??
+          _asDouble(j['lnt']) ??
+          _asDouble(j['lon']) ??
+          _asDouble(j['longitude']),
+      reportId: _asInt(j['report_id']) ?? _asInt(j['reportId']),
+      gridId: _asInt(j['grid_id']) ?? _asInt(j['gridId']),
+      createdAt: (j['created_at'] ?? j['createdAt'] ?? j['sent_at'])
+          ?.toString(),
+      isRead: _asBool(j['is_read']) ??
+          _asBool(j['isRead']) ??
+          _asBool(j['read']) ??
+          false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'body': body,
+        'lat': lat,
+        'lng': lng,
+        'report_id': reportId,
+        'grid_id': gridId,
+        'created_at': createdAt,
+        'is_read': isRead,
+      };
 }
 

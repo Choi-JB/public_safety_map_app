@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "872205545413",
+    "project_id": "public-safety-map",
+    "storage_bucket": "public-safety-map.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:872205545413:android:52cd48caf3e14e0864a5ac",
+        "android_client_info": {
+          "package_name": "com.publicsafetymap.public_safety_map_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAfaH6kxCP8v4QO4zROWtbbX555K7JTy-Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
