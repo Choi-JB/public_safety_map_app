@@ -43,4 +43,12 @@ class Env {
 
   /// OSM zoom. 너무 멀 때 다발 숨김 (대략 카카오 level≥7 대응)
   static const double accidentHideMaxZoom = 11.5;
+
+  /// 격자·인프라 정적 데이터 로컬 동기화 (device/check-data-version 백엔드 구현)
+  static const String checkDataVersionPath = '/sync/version';
+  static const String staticDataGridsPath = '/sync/grids';
+  static const String staticDataInfraPath = '/sync/infrastructures';
+
+  /// 로컬화 대상 data_type (accident_zone 등 나머지는 계속 기존 API 사용)
+  static const List<String> staticDataTypes = ['grid', 'infra'];
 }
