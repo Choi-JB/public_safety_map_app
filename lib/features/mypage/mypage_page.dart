@@ -17,6 +17,8 @@ import '../../data/repositories/report_repository.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/fcm_inbox_store.dart';
 import '../../providers/map_provider.dart';
+import '../../services/nearby_monitor.dart';
+import '../../services/nearby_report_alert.dart';
 import '../../widgets/media_image.dart';
 import '../../core/geo/geo_utils.dart';
 
@@ -816,7 +818,88 @@ class _MenuBody extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 12),
+        const _SettingsCard(),
       ],
+    );
+  }
+}
+
+class _SettingsCard extends StatefulWidget {
+  const _SettingsCard();
+
+  @override
+  State<_SettingsCard> createState() => _SettingsCardState();
+}
+
+class _SettingsCardState extends State<_SettingsCard> {
+  bool _enabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    NearbyReportAlert.isGlobalNotificationsEnabled().then((v) {
+      if (mounted) setState(() => _enabled = v);
+    });
+  }
+
+  void _toggle(bool value) async {
+    setState(() => _enabled = value);
+    await NearbyReportAlert.setGlobalNotificationsEnabled(value);
+    if (!value && mounted) {
+      final monitor = context.read<NearbyMonitor>();
+      if (monitor.enabled) {
+        await monitor.stop();
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+            child: Text(
+              '설정',
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              children: [
+                const Icon(Icons.notifications_outlined,
+                    size: 22, color: MapUiColors.accent),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    '알림 설정',
+                    style: TextStyle(fontSize: 15, color: Color(0xFF0F172A)),
+                  ),
+                ),
+                Switch.adaptive(
+                  value: _enabled,
+                  onChanged: _toggle,
+                  activeTrackColor: MapUiColors.accent,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -888,30 +971,26 @@ class _MenuTile extends StatelessWidget {
                   const SizedBox(width: 12),
                 ],
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        label,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      if (subtitle != null) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle!,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: MapUiColors.accent,
-                          ),
-                        ),
-                      ],
-                    ],
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF0F172A),
+                    ),
                   ),
                 ),
+                if (subtitle != null) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    subtitle!,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: MapUiColors.accent,
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 4),
                 const Icon(
                   Icons.chevron_right,
                   color: Color(0xFF94A3B8),
@@ -1009,12 +1088,10 @@ class _ReportListState extends State<_ReportList> {
           return const _ListLoadingFooter();
         }
         final r = widget.reports[i];
-        final date = r.createdAt?.split('T').first ?? '';
         final desc = (r.description ?? '').trim();
         return _ContentCard(
-          title: r.type ?? '제보',
-          subtitle: desc.isEmpty ? null : desc,
-          meta: date.isEmpty ? null : date,
+          title: '[${r.type ?? '제보'}] $desc',
+          meta: _formatDateTime(r.createdAt),
           onTap: () => widget.onTap(r),
         );
       },
@@ -1105,14 +1182,12 @@ class _FeedbackListState extends State<_FeedbackList> {
           return const _ListLoadingFooter();
         }
         final f = widget.feedbacks[i];
-        final date = f.createdAt?.split('T').first ?? '';
         final body = (f.comment?.isNotEmpty == true)
             ? f.comment!
             : f.tags.join(', ');
         return _ContentCard(
-          title: f.safetyFeeling ?? '피드백',
-          subtitle: body.isEmpty ? null : body,
-          meta: date.isEmpty ? null : date,
+          title: '[${f.safetyFeeling ?? '피드백'}] $body',
+          meta: _formatDateTime(f.createdAt),
           onTap: () => widget.onTap(f),
         );
       },
@@ -1282,12 +1357,12 @@ class _ContentCard extends StatelessWidget {
   const _ContentCard({
     required this.title,
     required this.onTap,
-    this.subtitle,
     this.meta,
   });
 
+  /// "[태그] 내용" 형태의 한 줄 요약
   final String title;
-  final String? subtitle;
+  /// 날짜-시간
   final String? meta;
   final VoidCallback onTap;
 
@@ -1296,14 +1371,14 @@ class _ContentCard extends StatelessWidget {
     return Material(
       color: Colors.white,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         side: const BorderSide(color: Color(0xFFE2E8F0)),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
             children: [
               Expanded(
@@ -1312,43 +1387,32 @@ class _ContentCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF0F172A),
                       ),
                     ),
-                    if (subtitle != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          height: 1.35,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
                     if (meta != null) ...[
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 3),
                       Text(
                         meta!,
                         style: const TextStyle(
-                          fontSize: 12,
-                          color: MapUiColors.accent,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 11.5,
+                          color: Color(0xFF94A3B8),
                         ),
                       ),
                     ],
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               const Icon(
                 Icons.chevron_right,
                 color: Color(0xFF94A3B8),
+                size: 20,
               ),
             ],
           ),
@@ -1356,6 +1420,13 @@ class _ContentCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// ISO8601 문자열 → "YYYY-MM-DD HH:mm" (날짜만 있던 자리에 시간까지 표시)
+String? _formatDateTime(String? iso) {
+  if (iso == null || iso.isEmpty) return null;
+  final t = iso.replaceFirst('T', ' ');
+  return t.length >= 16 ? t.substring(0, 16) : t;
 }
 
 class _EmptyListHint extends StatelessWidget {

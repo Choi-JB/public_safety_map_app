@@ -59,6 +59,9 @@ class NearbyMonitor extends ChangeNotifier {
   /// 감시 시작. [persist] true 이면 설정을 저장.
   Future<String?> start({bool persist = true}) async {
     if (_busy) return '처리 중입니다';
+    if (!await NearbyReportAlert.isGlobalNotificationsEnabled()) {
+      return '알림 설정이 꺼져 있습니다. 설정에서 알림을 켜주세요.';
+    }
     _busy = true;
     notifyListeners();
     try {

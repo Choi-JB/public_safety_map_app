@@ -35,7 +35,19 @@ class NearbyReportAlert {
   static const Duration minCheckInterval = Duration(seconds: 12);
   static const String _prefsNotifiedKey = 'nearby_notified_report_ids';
   static const String _prefsAccidentKey = 'nearby_notified_accident_ids';
+  static const String prefsGlobalNotifKey = 'app_notifications_enabled';
   static const int _maxNotifiedStored = 400;
+
+  /// 앱 전역 알림 ON/OFF (SharedPreferences 기반)
+  static Future<bool> isGlobalNotificationsEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(prefsGlobalNotifKey) ?? true;
+  }
+
+  static Future<void> setGlobalNotificationsEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(prefsGlobalNotifKey, value);
+  }
 
   /// 400m 원 포함용 bbox 반경(~610m)
   static const double _bboxDeltaDeg = 0.0055;
@@ -292,6 +304,7 @@ class NearbyReportAlert {
 
   Future<void> checkNear(LatLng me, {bool force = false}) async {
     if (!alertsMasterEnabled) return;
+    if (!await isGlobalNotificationsEnabled()) return;
     if (!_ready) return;
     if (!isValidLatLng(me.latitude, me.longitude)) return;
 

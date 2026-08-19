@@ -84,12 +84,7 @@ class ReportListCard extends StatelessWidget {
         color: selected ? MapUiColors.reportSelectedBg : Colors.white,
         elevation: selected ? 2 : 0,
         shape: RoundedRectangleBorder(
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(12),
-            topRight: Radius.circular(24),
-            bottomRight: Radius.circular(24),
-            bottomLeft: Radius.circular(12),
-          ),
+          borderRadius: const BorderRadius.all(Radius.circular(16)),
           side: BorderSide(
             color: selected ? MapUiColors.report : const Color(0xFFE5E7EB),
             width: selected ? 2 : 1,
@@ -97,12 +92,7 @@ class ReportListCard extends StatelessWidget {
         ),
         child: InkWell(
           onTap: onTap,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(12),
-            topRight: Radius.circular(24),
-            bottomRight: Radius.circular(24),
-            bottomLeft: Radius.circular(12),
-          ),
+          borderRadius: const BorderRadius.all(Radius.circular(16)),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -110,6 +100,8 @@ class ReportListCard extends StatelessWidget {
               children: [
                 Text(
                   type,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
@@ -175,12 +167,7 @@ class EventListCard extends StatelessWidget {
         color: selected ? MapUiColors.eventSelectedBg : Colors.white,
         elevation: selected ? 2 : 0,
         shape: RoundedRectangleBorder(
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(12),
-            topRight: Radius.circular(24),
-            bottomRight: Radius.circular(24),
-            bottomLeft: Radius.circular(12),
-          ),
+          borderRadius: const BorderRadius.all(Radius.circular(16)),
           side: BorderSide(
             color: selected ? MapUiColors.event : const Color(0xFFE5E7EB),
             width: selected ? 2 : 1,
@@ -188,12 +175,7 @@ class EventListCard extends StatelessWidget {
         ),
         child: InkWell(
           onTap: onTap,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(12),
-            topRight: Radius.circular(24),
-            bottomRight: Radius.circular(24),
-            bottomLeft: Radius.circular(12),
-          ),
+          borderRadius: const BorderRadius.all(Radius.circular(16)),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
