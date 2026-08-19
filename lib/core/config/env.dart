@@ -38,6 +38,11 @@ class Env {
   /// 앱 사고다발 필터 반경 (웹 10km보다 좁게)
   static const double accidentZoneRadiusKm = 4;
 
+  /// 제보·행사(API 실비용) 재조회 캐시 반경. 격자 렌더링용 bbox(줌별 ~2~4.5km)와 별개로
+  /// 훨씬 넓게 한 번에 받아둬서, 이 반경 안에서 지도를 움직이는 동안은 재요청하지 않는다.
+  /// (제보/행사는 서울 전역 30km 기준 105건·29KB 수준이라 넓혀도 비용 부담이 거의 없음 — 실측)
+  static const double liveDataFetchRadiusKm = 15;
+
   /// 웹 ACCIDENT_REGION_DEBOUNCE_MS
   static const int accidentRegionDebounceMs = 2000;
 

@@ -35,6 +35,23 @@ double distKm(double lat1, double lng1, double lat2, double lng2) {
 
 double _rad(double deg) => deg * math.pi / 180;
 
+/// 중심 좌표에서 반경(km) 정사각 bbox. 위도 111km/deg 근사, 경도는 위도에 따라 보정.
+({double swLat, double swLng, double neLat, double neLng}) boundsAroundKm(
+  double lat,
+  double lng,
+  double radiusKm,
+) {
+  final latDeltaDeg = radiusKm / 111.0;
+  final lngDenom = (111.0 * math.cos(_rad(lat))).abs();
+  final lngDeltaDeg = radiusKm / (lngDenom < 1 ? 1 : lngDenom);
+  return (
+    swLat: lat - latDeltaDeg,
+    swLng: lng - lngDeltaDeg,
+    neLat: lat + latDeltaDeg,
+    neLng: lng + lngDeltaDeg,
+  );
+}
+
 /// zoom NaN/0/범위 밖 → fallback (flutter_map tile floor 크래시 방지)
 double safeZoom(double? zoom, {double fallback = 14}) {
   final fb = fallback.clamp(kMapMinZoom, kMapMaxZoom);

@@ -314,7 +314,7 @@ class _MyPageState extends State<MyPage> {
         gridId: item.gridId,
       ),
     );
-    context.go('/map');
+    context.pop();
   }
 
   Future<void> _deleteAllNotifications() async {
@@ -354,7 +354,7 @@ class _MyPageState extends State<MyPage> {
       final map = context.read<MapProvider>();
       map.setPendingMypageReopen(reportId: _toIntId(r.id));
       map.requestMapFocus(result);
-      context.go('/map');
+      context.pop();
     }
   }
 
@@ -379,7 +379,7 @@ class _MyPageState extends State<MyPage> {
       final map = context.read<MapProvider>();
       map.setPendingMypageReopen(feedbackId: f.id > 0 ? f.id : null);
       map.requestMapFocus(result);
-      context.go('/map');
+      context.pop();
     }
   }
 
@@ -605,7 +605,7 @@ class _MyPageState extends State<MyPage> {
     if (ok != true || !mounted) return;
     await auth.logout();
     if (!mounted) return;
-    context.go('/map');
+    context.pop();
   }
 
   @override
