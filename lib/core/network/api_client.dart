@@ -21,10 +21,11 @@ class ApiClient {
       connectTimeout: const Duration(seconds: 15),
       receiveTimeout: const Duration(seconds: 20),
       // headers: {'Content-Type': 'application/json'},
-      validateStatus: (code) => 
+      validateStatus: (code) =>
       code != null && code < 500 && code != 401,
     ),
-  );
+    // 정적 데이터 덤프(수십MB) JSON 디코딩이 메인 isolate를 막지 않도록 백그라운드에서 처리
+  )..transformer = BackgroundTransformer();
 
   CookieJar? _cookieJar;
   bool _ready = false;
@@ -127,10 +128,14 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? query,
     T Function(dynamic raw)? parser,
+    Duration? receiveTimeout,
   }) async {
     final res = await dio.get<Map<String, dynamic>>(
       path,
       queryParameters: query,
+      options: receiveTimeout != null
+          ? Options(receiveTimeout: receiveTimeout)
+          : null,
     );
     return _parse(res, parser);
   }

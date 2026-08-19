@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import 'core/network/api_client.dart';
 import 'core/theme/app_theme.dart';
+import 'data/local/static_data_local_store.dart';
 import 'data/models/models.dart';
 import 'data/repositories/auth_repository.dart';
 import 'data/repositories/feedback_repository.dart';
@@ -19,11 +20,13 @@ import 'features/feedback/create_feedback_page.dart';
 import 'features/map/map_page.dart';
 import 'features/mypage/mypage_page.dart';
 import 'features/report/create_report_page.dart';
+import 'features/splash/splash_page.dart';
 import 'providers/auth_provider.dart';
 import 'providers/map_provider.dart';
 import 'services/nearby_monitor.dart';
 import 'services/nearby_report_alert.dart';
 import 'services/guidance_notification.dart';
+import 'services/static_data_sync_service.dart';
 //nav
 import 'data/repositories/direction_repository.dart';
 import 'providers/nav_provider.dart';
@@ -44,8 +47,13 @@ Future<void> main() async {
   final api = ApiClient();
   await api.init();
 
+  final localStore = StaticDataLocalStore.instance;
+  await localStore.init();
+  final staticDataSync = StaticDataSyncService(api, localStore);
+  unawaited(staticDataSync.syncIfNeeded());
+
   final authRepo = AuthRepository(api);
-  final mapRepo = MapRepository(api);
+  final mapRepo = MapRepository(api, localStore: localStore);
   //nav
   final directionRepo = DirectionRepository();
 
@@ -74,6 +82,7 @@ Future<void> main() async {
   await nearbyMonitor.hydrate();
 
   final mapProvider = MapProvider(mapRepo, nearbyAlert: nearbyAlert);
+  await mapProvider.hydrateLastPosition();
 
   final auth = AuthProvider(api, authRepo, fcm);
   await auth.hydrate();
@@ -96,6 +105,7 @@ Future<void> main() async {
         Provider.value(value: mypageRepo),
         Provider.value(value: nearbyAlert),
         Provider.value(value: guidanceNotif),
+        ChangeNotifierProvider.value(value: staticDataSync),
         ChangeNotifierProvider.value(value: fcmInbox),
         ChangeNotifierProvider.value(value: nearbyMonitor),
         ChangeNotifierProvider.value(value: auth),
@@ -126,9 +136,10 @@ class _SafetyMapAppState extends State<SafetyMapApp> {
   StreamSubscription<AccidentZoneItem>? _openAccidentSub;
 
   late final GoRouter _router = GoRouter(
-    initialLocation: '/map',
+    initialLocation: '/splash',
     refreshListenable: widget.auth,
     routes: [
+      GoRoute(path: '/splash', builder: (_, __) => const SplashPage()),
       GoRoute(path: '/login', builder: (_, __) => const LoginPage()),
       GoRoute(path: '/signup', builder: (_, __) => const SignupPage()),
       GoRoute(

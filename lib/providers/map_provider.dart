@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/config/env.dart';
 import '../core/geo/geo_utils.dart';
@@ -68,10 +69,42 @@ class MapProvider extends ChangeNotifier {
   GridDetail? selectedGridDetail;
   List<InfrastructureItem> selectedGridInfras = [];
 
+  /// 제보/행사(API, 매번 실비용) 마지막 조회 위치 — 격자·인프라는 로컬이라 매번 새로 조회해도
+  /// 비용이 없지만, 제보/행사는 화면 반경의 절반 이상 움직였을 때만 재조회한다.
+  LatLng? _lastLiveFetchCenter;
+
   /// 캐시용 마지막 행정 키 (siDo|guGun)
   String? _lastAccidentRegionKey;
   Timer? _accidentDebounce;
   int _accidentReqId = 0;
+
+  static const _prefsLatKey = 'map_last_lat_v1';
+  static const _prefsLngKey = 'map_last_lng_v1';
+  static const _prefsZoomKey = 'map_last_zoom_v1';
+
+  /// main()에서 runApp() 전에 1회 호출 — 마지막으로 보던 위치로 초기 카메라를 세팅해서
+  /// GPS 응답을 기다리지 않고도 화면을 바로 그릴 수 있게 한다.
+  Future<void> hydrateLastPosition() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final p = tryLatLng(
+        prefs.getDouble(_prefsLatKey),
+        prefs.getDouble(_prefsLngKey),
+      );
+      if (p != null) center = p;
+      final z = prefs.getDouble(_prefsZoomKey);
+      if (z != null) zoom = safeZoom(z);
+    } catch (_) {}
+  }
+
+  Future<void> _persistLastPosition() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_prefsLatKey, center.latitude);
+      await prefs.setDouble(_prefsLngKey, center.longitude);
+      await prefs.setDouble(_prefsZoomKey, zoom);
+    } catch (_) {}
+  }
 
   List<GridItem> get displayGrids {
     if (!gridsVisible) return const [];
@@ -223,6 +256,21 @@ class MapProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // 격자는 로컬 SQLite라 매번 다시 조회해도 비용이 없어 그대로 zoom별 bbox로 조회한다.
+      // 제보·행사는 API 실비용이지만 실측상 서울 전역 30km 기준 105건·29KB 수준으로 가벼워서
+      // (격자 렌더링 bbox보다 훨씬 넓은) liveDataFetchRadiusKm 반경으로 한 번에 넉넉히 받아두고,
+      // 그 반경의 50% 이상 벗어났을 때만 재조회한다.
+      final last = _lastLiveFetchCenter;
+      final movedKm = last == null
+          ? double.infinity
+          : distKm(
+              last.latitude,
+              last.longitude,
+              newCenter.latitude,
+              newCenter.longitude,
+            );
+      final shouldRefetchLive = movedKm > Env.liveDataFetchRadiusKm * 0.5;
+
       final futures = <Future>[
         _mapRepo.fetchGrids(
           swLat: swLat,
@@ -230,32 +278,47 @@ class MapProvider extends ChangeNotifier {
           neLat: neLat,
           neLng: neLng,
         ),
-        _mapRepo.fetchReports(
-          swLat: swLat,
-          swLng: swLng,
-          neLat: neLat,
-          neLng: neLng,
-        ),
-        _mapRepo.fetchCityEvents(
-          swLat: swLat,
-          swLng: swLng,
-          neLat: neLat,
-          neLng: neLng,
-        ),
       ];
+      if (shouldRefetchLive) {
+        final liveBounds = boundsAroundKm(
+          newCenter.latitude,
+          newCenter.longitude,
+          Env.liveDataFetchRadiusKm,
+        );
+        futures.add(
+          _mapRepo.fetchReports(
+            swLat: liveBounds.swLat,
+            swLng: liveBounds.swLng,
+            neLat: liveBounds.neLat,
+            neLng: liveBounds.neLng,
+          ),
+        );
+        futures.add(
+          _mapRepo.fetchCityEvents(
+            swLat: liveBounds.swLat,
+            swLng: liveBounds.swLng,
+            neLat: liveBounds.neLat,
+            neLng: liveBounds.neLng,
+          ),
+        );
+      }
       final results = await Future.wait(futures);
       grids = (results[0] as List<GridItem>)
           .where((g) => isValidLatLng(g.lat, g.lng))
           .toList();
-      reports = (results[1] as List<ReportItem>)
-          .where((r) => isValidLatLng(r.lat, r.lng))
-          .toList();
-      events = (results[2] as List<CityEventItem>)
-          .where((e) => isValidLatLng(e.lat, e.lng))
-          .toList();
+      if (shouldRefetchLive) {
+        reports = (results[1] as List<ReportItem>)
+            .where((r) => isValidLatLng(r.lat, r.lng))
+            .toList();
+        events = (results[2] as List<CityEventItem>)
+            .where((e) => isValidLatLng(e.lat, e.lng))
+            .toList();
+        _lastLiveFetchCenter = newCenter;
+      }
 
       if (infraVisible) await refreshInfra(silent: true);
       if (accidentZonesVisible) scheduleAccidentZonesRefresh();
+      unawaited(_persistLastPosition());
     } on ApiException catch (e) {
       error = userFacingError(e);
     } catch (e) {
