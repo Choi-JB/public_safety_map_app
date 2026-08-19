@@ -51,6 +51,7 @@ Color accidentZoneColor(String? type) {
 ThemeData buildAppTheme() {
   return ThemeData(
     useMaterial3: true,
+    fontFamily: 'NotoSansKR',
     colorScheme: ColorScheme.fromSeed(
       seedColor: MapUiColors.accent,
       brightness: Brightness.light,
@@ -130,5 +131,20 @@ Color infraMarkerColor(String? type) {
       return MapUiColors.store;
     default:
       return MapUiColors.accent;
+  }
+}
+
+IconData infraMarkerIcon(String? type) {
+  switch (type) {
+    case 'CCTV':
+      return Icons.videocam;
+    case '경찰서':
+      return Icons.local_police;
+    case '소방서':
+      return Icons.local_fire_department;
+    case '편의점':
+      return Icons.store;
+    default:
+      return Icons.place;
   }
 }

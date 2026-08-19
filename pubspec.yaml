@@ -77,6 +77,20 @@ flutter:
     - android/app/src/main/res/drawable/public_safaty_map_icon_512x512.png
     - android/app/src/main/res/drawable/public_safaty_map_splash_1440x2560.png
 
+  fonts:
+    - family: NotoSansKR
+      fonts:
+        - asset: assets/fonts/NotoSansKR-VariableFont_wght.ttf
+          weight: 400
+        - asset: assets/fonts/NotoSansKR-VariableFont_wght.ttf
+          weight: 500
+        - asset: assets/fonts/NotoSansKR-VariableFont_wght.ttf
+          weight: 600
+        - asset: assets/fonts/NotoSansKR-VariableFont_wght.ttf
+          weight: 700
+        - asset: assets/fonts/NotoSansKR-VariableFont_wght.ttf
+          weight: 800
+
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 
