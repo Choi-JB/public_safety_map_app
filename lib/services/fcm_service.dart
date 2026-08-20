@@ -4,7 +4,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-
 import '../core/network/api_client.dart';
 import '../firebase_options.dart';
 import '../providers/fcm_inbox_store.dart';
@@ -14,6 +13,17 @@ const _fcmChannelId = 'fcm_push';
 const _fcmChannelName = '서버 알림';
 const _fcmNotifId = 80001;
 
+/// FCM 신규 제보 알림 — 테두리 삼각형 + 채워진 느낌표 (빨강 #DC2626)
+const _reportPushAndroidDetails = AndroidNotificationDetails(
+  _fcmChannelId,
+  _fcmChannelName,
+  channelDescription: '새로운 제보 등 서버 푸시',
+  icon: 'ic_stat_report_warning',
+  color: Color(0xFFDC2626),
+  importance: Importance.high,
+  priority: Priority.high,
+  largeIcon: DrawableResourceAndroidBitmap('ic_notification_report_warning'),
+);
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -22,11 +32,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final plugin = FlutterLocalNotificationsPlugin();
   await plugin.initialize(
     settings: const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      android: AndroidInitializationSettings('ic_stat_report_warning'),
       iOS: DarwinInitializationSettings(),
     ),
-  );
-  final androidImpl = plugin.resolvePlatformSpecificImplementation<
+  );  final androidImpl = plugin.resolvePlatformSpecificImplementation<
       AndroidFlutterLocalNotificationsPlugin>();
   await androidImpl?.createNotificationChannel(
     const AndroidNotificationChannel(
@@ -54,16 +63,9 @@ Future<void> _showReportNotification(
     body: body,
     payload: reportId != null ? 'report:$reportId' : null,
     notificationDetails: const NotificationDetails(
-      android: AndroidNotificationDetails(
-        _fcmChannelId,
-        _fcmChannelName,
-        channelDescription: '새로운 제보 등 서버 푸시',
-        importance: Importance.high,
-        priority: Priority.high,
-      ),
+      android: _reportPushAndroidDetails,
       iOS: DarwinNotificationDetails(),
-    ),
-  );
+    ),  );
 }
 
 class FcmService {
