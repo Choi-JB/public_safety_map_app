@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -19,9 +18,6 @@ const _accidentTypeLabel = {
   'motorcycle': '이륜차',
   'schoolzone': '어린이보호구역',
 };
-
-const _nearbyNotifIcon = 'ic_stat_report_warning';
-const _nearbyNotifColor = Color(0xFFDC2626);
 
 /// 내 GPS 기준 반경 [radiusM] 내 제보·(옵션) 위험구간 로컬 알림.
 class NearbyReportAlert {
@@ -111,7 +107,7 @@ class NearbyReportAlert {
     final aSaved = _prefs?.getStringList(_prefsAccidentKey) ?? const [];
     _accidentNotifiedIds.addAll(aSaved);
 
-    const android = AndroidInitializationSettings(_nearbyNotifIcon);
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -533,8 +529,6 @@ class NearbyReportAlert {
           channelId,
           channelName,
           channelDescription: '내 위치 반경 400m 내 제보 알림',
-          icon: _nearbyNotifIcon,
-          color: _nearbyNotifColor,
           importance: Importance.high,
           priority: Priority.high,
           groupKey: groupKey,
@@ -580,8 +574,6 @@ class NearbyReportAlert {
           channelId,
           channelName,
           channelDescription: '내 위치 반경 400m 내 제보 알림',
-          icon: _nearbyNotifIcon,
-          color: _nearbyNotifColor,
           importance: Importance.high,
           priority: Priority.high,
           groupKey: groupKey,
@@ -611,8 +603,6 @@ class NearbyReportAlert {
           accidentChannelId,
           accidentChannelName,
           channelDescription: '내 위치 반경 400m 내 사고다발 알림',
-          icon: _nearbyNotifIcon,
-          color: _nearbyNotifColor,
           importance: Importance.high,
           priority: Priority.high,
           groupKey: accidentGroupKey,
@@ -660,8 +650,6 @@ class NearbyReportAlert {
           accidentChannelId,
           accidentChannelName,
           channelDescription: '내 위치 반경 400m 내 사고다발 알림',
-          icon: _nearbyNotifIcon,
-          color: _nearbyNotifColor,
           importance: Importance.high,
           priority: Priority.high,
           groupKey: accidentGroupKey,
