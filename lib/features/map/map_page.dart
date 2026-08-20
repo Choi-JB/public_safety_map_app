@@ -20,7 +20,6 @@ import '../../core/network/api_exception.dart';
 import '../../core/network/user_error.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/models.dart';
-import '../../data/repositories/mypage_repository.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/map_provider.dart';
 import '../../services/nearby_monitor.dart';
@@ -41,7 +40,7 @@ const double _defaultMapZoom = 17;
 /// 내 위치 마커 줌
 const double _myLocationZoom = 17;
 
-/// 하단 패널 탭 (웹 좌측 레일: 격자 / 행사 / 제보 / 내 제보)
+/// 하단 패널 탭 (웹 좌측 레일: 격자 / 행사 / 제보 / 길찾기)
 enum MapPanelTab { grid, event, report, nav }
 
 String _accidentChipLabel(MapProvider map) {
@@ -55,6 +54,14 @@ String _accidentChipLabel(MapProvider map) {
   }
   return '위험구간 · $n종';
 }
+
+/// 마이페이지 내 제보와 동일한 날짜 표시 (YYYY-MM-DD HH:mm)
+String? _formatListDateTime(String? iso) {
+  if (iso == null || iso.isEmpty) return null;
+  final t = iso.replaceFirst('T', ' ');
+  return t.length >= 16 ? t.substring(0, 16) : t;
+}
+
 class MapPage extends StatefulWidget {
   const MapPage({super.key, this.focus});
 
@@ -166,8 +173,6 @@ class _MapPageState extends State<MapPage>
   bool _wasArrived = false;
   NavProvider? _navListened;
   MapProvider? _mapListened;
-  AuthProvider? _authListened;
-  bool? _wasLoggedIn;
 
   @override
   void initState() {
@@ -207,18 +212,14 @@ class _MapPageState extends State<MapPage>
       _mapListened = map;
       map.addListener(_onMapProviderChanged);
     }
-    final auth = context.read<AuthProvider>();
-    if (!identical(_authListened, auth)) {
-      _authListened?.removeListener(_onAuthProviderChanged);
-      _authListened = auth;
-      _wasLoggedIn = auth.isLoggedIn;
-      auth.addListener(_onAuthProviderChanged);
-    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      if (mounted) {
+        unawaited(context.read<MapProvider>().hydratePendingFcmReports());
+      }
       _onMapScreenVisibilityMaybeResumed();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
@@ -247,9 +248,6 @@ class _MapPageState extends State<MapPage>
       } else {
         _onMapScreenVisibilityMaybeResumed();
       }
-      if (_panelTab == MapPanelTab.myReport) {
-        unawaited(_loadMyReports());
-      }
     } else {
       // 다른 화면: idle 정지 (6-A)
       _idleFollowTimer?.cancel();
@@ -261,25 +259,6 @@ class _MapPageState extends State<MapPage>
         WidgetsBinding.instance.addPostFrameCallback((_) => _onRouteChanged());
       }
     }
-  }
-
-  void _onAuthProviderChanged() {
-    if (!mounted) return;
-    final auth = _authListened;
-    if (auth == null) return;
-    final loggedIn = auth.isLoggedIn;
-    if (_wasLoggedIn == loggedIn) return;
-    _wasLoggedIn = loggedIn;
-    if (_panelTab == MapPanelTab.myReport) {
-      unawaited(_loadMyReports());
-      return;
-    }
-    setState(() {
-      _myReports = [];
-      _myError = null;
-      _myLoading = false;
-      _selectedMyReportId = null;
-    });
   }
 
   void _onMapProviderChanged() {
@@ -824,8 +803,6 @@ class _MapPageState extends State<MapPage>
     _navListened = null;
     _mapListened?.removeListener(_onMapProviderChanged);
     _mapListened = null;
-    _authListened?.removeListener(_onAuthProviderChanged);
-    _authListened = null;
     _openReportSub?.cancel();
     _openAccidentSub?.cancel();
     _posSub?.cancel();
@@ -3156,20 +3133,16 @@ class _PanelBody extends StatelessWidget {
           ...map.reports.where((r) => r.id == selectedReportId),
           ...map.reports.where((r) => r.id != selectedReportId),
         ];
-        return ListView.builder(
-          padding: const EdgeInsets.only(bottom: 12),
+        return ListView.separated(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           itemCount: reports.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 10),
           itemBuilder: (_, i) {
             final r = reports[i];
-            final nick = r.userNickname ?? '';
-            final meta = [
-              if (nick.isNotEmpty) nick,
-              formatRange(r.createdAt, r.expireAt),
-            ].join(' · ');
+            final desc = (r.description ?? '').trim();
             return ReportListCard(
-              type: r.type ?? '제보',
-              description: r.description ?? '',
-              meta: meta,
+              title: '[${r.type ?? '제보'}] $desc',
+              meta: _formatListDateTime(r.createdAt),
               selected: selectedReportId == r.id,
               onTap: () => onSelectReport(r),
             );

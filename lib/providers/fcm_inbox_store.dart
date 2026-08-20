@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/models/models.dart';
 import '../services/fcm_report_proximity.dart';
+import '../services/nearby_report_alert.dart';
 
 /// 앱에서 발생한 알림을 기기에 보관한다. 백그라운드 isolate에서도 동일 키로 기록한다.
 class FcmInboxStore extends ChangeNotifier with WidgetsBindingObserver {
@@ -97,11 +98,13 @@ class FcmInboxStore extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
-  /// 백그라운드 isolate에서 호출 가능. 제보(type=report)이고 400m 안일 때만 보관.
+  /// 백그라운드 isolate에서 호출 가능. 제보 페이로드이고 400m 안(GPS 없으면 허용)일 때 보관.
   static Future<bool> appendFromMessage(RemoteMessage message) async {
-    if (message.data['type'] != 'report') return false;
-    if (!await FcmReportProximity.isWithinRadius(message)) return false;
-    return appendItem(fromRemoteMessage(message));
+    final report = ReportItem.fromFcmData(message.data);
+    if (report == null) return false;
+    if (!await FcmReportProximity.isReportWithinRadius(report)) return false;
+    final distM = await FcmReportProximity.distanceToReportMeters(report);
+    return appendItem(fromRemoteMessage(message, distanceM: distM));
   }
 
   static Future<bool> appendItem(AppNotification item) async {
@@ -113,26 +116,18 @@ class FcmInboxStore extends ChangeNotifier with WidgetsBindingObserver {
     return true;
   }
 
-  static AppNotification fromRemoteMessage(RemoteMessage message) {
+  static AppNotification fromRemoteMessage(
+    RemoteMessage message, {
+    double? distanceM,
+  }) {
     final data = message.data;
-    final type = data['type']?.toString();
-    final titleRaw = (message.notification?.title ?? data['title'] ?? '')
-        .toString()
-        .trim();
-    final title = titleRaw.isNotEmpty
-        ? titleRaw
-        : switch (type) {
-            'report' => '새로운 제보가 등록되었습니다',
-            'accident' || 'accident_zone' => '주변 위험구간 알림',
-            _ => '알림',
-          };
-    final bodyRaw = (message.notification?.body ??
-            data['body'] ??
-            data['content'] ??
-            data['message'] ??
-            '')
-        .toString()
-        .trim();
+    final report = ReportItem.fromFcmData(data);
+    final title = report != null
+        ? NearbyReportAlert.formatReportAlertTitle(report)
+        : '제보';
+    final body = report != null
+        ? NearbyReportAlert.formatReportAlertBody(report, distanceM: distanceM)
+        : null;
     final sent = message.sentTime ?? DateTime.now();
     var id = (message.messageId ?? '').trim();
     if (id.isEmpty) {
@@ -141,24 +136,14 @@ class FcmInboxStore extends ChangeNotifier with WidgetsBindingObserver {
     return AppNotification(
       id: id,
       title: title,
-      body: bodyRaw.isEmpty ? null : bodyRaw,
-      lat: _asDouble(data['lat'] ?? data['latitude']),
-      lng: _asDouble(
-        data['lng'] ?? data['lnt'] ?? data['lon'] ?? data['longitude'],
-      ),
-      reportId: _asInt(data['report_id'] ?? data['reportId']) ??
-          (type == 'report' ? _asInt(data['id']) : null),
+      body: body,
+      lat: report?.lat,
+      lng: report?.lng,
+      reportId: report?.id,
       gridId: _asInt(data['grid_id'] ?? data['gridId']),
-      createdAt: sent.toIso8601String(),
+      createdAt: report?.createdAt ?? sent.toIso8601String(),
       isRead: false,
     );
-  }
-
-  static double? _asDouble(dynamic v) {
-    if (v == null) return null;
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v);
-    return null;
   }
 
   static int? _asInt(dynamic v) {

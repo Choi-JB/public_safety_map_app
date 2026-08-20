@@ -23,9 +23,10 @@ class ReportRepository {
     );
   }
 
-  /// PATCH /reports/:id — description, img_url 만 (본인)
+  /// PATCH /reports/:id — type, description, img_url (본인)
   Future<void> updateReport(
     int id, {
+    String? type,
     String? description,
     String? imgUrl,
     bool clearImage = false,
@@ -33,6 +34,7 @@ class ReportRepository {
     await _api.patch<dynamic>(
       '/reports/$id',
       body: {
+        if (type != null) 'type': type,
         if (description != null) 'description': description,
         if (clearImage) 'img_url': null,
         if (!clearImage && imgUrl != null) 'img_url': imgUrl,

@@ -83,6 +83,9 @@ Future<void> main() async {
 
   final mapProvider = MapProvider(mapRepo, nearbyAlert: nearbyAlert);
   await mapProvider.hydrateLastPosition();
+  await mapProvider.hydratePendingFcmReports();
+  fcm.bindMap(mapProvider);
+  fcm.bindNearbyAlert(nearbyAlert);
 
   final auth = AuthProvider(api, authRepo, fcm);
   await auth.hydrate();

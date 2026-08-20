@@ -234,6 +234,48 @@ class NearbyReportAlert {
   }
 
   ReportItem? cachedReport(int id) => _reportCache[id];
+
+  void cacheReport(ReportItem report) {
+    _reportCache[report.id] = report;
+  }
+
+  /// FCM 등으로 이미 알림을 띄운 제보 — 주변 감시가 같은 id로 재알림하지 않음.
+  Future<void> markReportNotified(int reportId) async {
+    if (!_notifiedIds.add(reportId)) return;
+    await _persistNotified();
+  }
+
+  /// 백그라운드 isolate용. prefs만 갱신. checkNear 시작 시 메모리와 병합한다.
+  static Future<void> markReportNotifiedPersist(int reportId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final list = List<String>.from(
+        prefs.getStringList(_prefsNotifiedKey) ?? const [],
+      );
+      final idStr = reportId.toString();
+      if (list.contains(idStr)) return;
+      list.add(idStr);
+      final trimmed = list.length > _maxNotifiedStored
+          ? list.sublist(list.length - _maxNotifiedStored)
+          : list;
+      await prefs.setStringList(_prefsNotifiedKey, trimmed);
+    } catch (_) {}
+  }
+
+  Future<void> _mergeNotifiedFromPrefs() async {
+    try {
+      final prefs = _prefs ?? await SharedPreferences.getInstance();
+      _prefs = prefs;
+      await prefs.reload();
+      final saved = prefs.getStringList(_prefsNotifiedKey) ?? const [];
+      for (final s in saved) {
+        final id = int.tryParse(s);
+        if (id != null) _notifiedIds.add(id);
+      }
+    } catch (_) {}
+  }
+
   AccidentZoneItem? cachedAccident(String id) => _accidentCache[id];
 
   int? takePendingOpenReportId() {
@@ -323,6 +365,7 @@ class NearbyReportAlert {
     _lastCheck = now;
 
     try {
+      await _mergeNotifiedFromPrefs();
       await _checkReports(me);
       if (accidentAlertsEnabled) {
         await _checkAccidents(me);
@@ -516,12 +559,8 @@ class NearbyReportAlert {
 
   Future<void> _showReportIndividual(_NearReport item) async {
     final r = item.report;
-    final type = (r.type ?? '제보').trim();
-    final dist = item.distanceM.round();
-    final desc = (r.description ?? '').trim();
-    final body = desc.isEmpty
-        ? '약 ${dist}m'
-        : '약 ${dist}m · ${_clip(desc, 48)}';
+    final type = formatReportAlertTitle(r);
+    final body = formatReportAlertBody(r, distanceM: item.distanceM);
 
     await _plugin.show(
       id: _childNotificationId(r.id),
@@ -679,6 +718,25 @@ class NearbyReportAlert {
   String _clip(String s, int max) {
     if (s.length <= max) return s;
     return '${s.substring(0, max)}…';
+  }
+
+  /// FCM·주변 감시 공통 제보 알림 제목
+  static String formatReportAlertTitle(ReportItem r) {
+    final t = (r.type ?? '제보').trim();
+    return t.isEmpty ? '제보' : t;
+  }
+
+  /// FCM·주변 감시 공통 제보 알림 본문 (`약 120m · 설명…`)
+  static String formatReportAlertBody(ReportItem r, {double? distanceM}) {
+    final desc = (r.description ?? '').trim();
+    final clipped = desc.isEmpty
+        ? ''
+        : (desc.length <= 48 ? desc : '${desc.substring(0, 48)}…');
+    if (distanceM != null) {
+      final dist = '약 ${distanceM.round()}m';
+      return clipped.isEmpty ? dist : '$dist · $clipped';
+    }
+    return clipped.isEmpty ? '주변에 새 제보가 있습니다' : clipped;
   }
 
   Future<void> _logInbox({

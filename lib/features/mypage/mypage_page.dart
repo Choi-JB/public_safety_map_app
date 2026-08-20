@@ -21,6 +21,7 @@ import '../../services/nearby_monitor.dart';
 import '../../services/nearby_report_alert.dart';
 import '../../widgets/media_image.dart';
 import '../../core/geo/geo_utils.dart';
+import '../report/create_report_page.dart';
 
 const _kText = Color(0xFF0F172A);
 const _kMuted = Color(0xFF64748B);
@@ -117,6 +118,32 @@ ButtonStyle _sheetFilledStyle({Color background = MapUiColors.accent}) {
 }
 
 const _safetyFeelings = ['안전', '보통', '불안'];
+
+class _SheetLabeled extends StatelessWidget {
+  const _SheetLabeled({required this.label, required this.child});
+
+  final String label;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: _kMuted,
+          ),
+        ),
+        const SizedBox(height: 6),
+        child,
+      ],
+    );
+  }
+}
 
 int? _toIntId(Object? id) {
   if (id is int) return id;
@@ -1492,15 +1519,23 @@ class _ReportDetailSheet extends StatefulWidget {
 
 class _ReportDetailSheetState extends State<_ReportDetailSheet> {
   late final TextEditingController _desc;
+  late String _type;
   bool _editing = false;
   bool _busy = false;
   String? _localImagePath;
   bool _clearImage = false;
   late String? _currentImgUrl;
 
+  List<String> get _typeOptions {
+    if (_type.isEmpty || reportTypes.contains(_type)) return reportTypes;
+    return [_type, ...reportTypes];
+  }
+
   @override
   void initState() {
     super.initState();
+    final t = widget.report.type?.trim();
+    _type = (t != null && t.isNotEmpty) ? t : reportTypes.first;
     _desc = TextEditingController(text: widget.report.description ?? '');
     _currentImgUrl = widget.report.imgUrl;
   }
@@ -1552,6 +1587,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       }
       await repo.updateReport(
         id,
+        type: _type,
         description: desc,
         imgUrl: imgUrl,
         clearImage: _clearImage && _localImagePath == null,
@@ -1590,6 +1626,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
     try {
       await context.read<ReportRepository>().deleteReport(id);
       if (!mounted) return;
+      context.read<MapProvider>().removeReportById(id);
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context, true);
       messenger.showSnackBar(const SnackBar(content: Text('제보가 삭제되었습니다')));
@@ -1613,11 +1650,7 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
     final r = widget.report;
     final mq = MediaQuery.of(context);
     final bottomPad = 24 + mq.viewPadding.bottom + mq.viewInsets.bottom;
-    final meta = [
-      if (r.createdAt != null) r.createdAt!.split('T').first,
-      if (r.lat != null && r.lng != null)
-        '${r.lat!.toStringAsFixed(5)}, ${r.lng!.toStringAsFixed(5)}',
-    ].join(' · ');
+    final created = _formatDateTime(r.createdAt) ?? '-';
 
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(16, 8, 16, bottomPad),
@@ -1634,34 +1667,74 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  r.type ?? '제보',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: _kText,
+                _SheetLabeled(
+                  label: '유형',
+                  child: _editing
+                      ? DropdownButtonFormField<String>(
+                          // ignore: deprecated_member_use
+                          value: _type,
+                          items: _typeOptions
+                              .map(
+                                (t) => DropdownMenuItem(
+                                  value: t,
+                                  child: Text(t),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) {
+                            if (v != null) setState(() => _type = v);
+                          },
+                          decoration: _sheetFieldDecoration(label: '유형')
+                              .copyWith(labelText: null),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            color: _kText,
+                          ),
+                        )
+                      : Text(
+                          _type.isEmpty ? '제보' : _type,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: _kText,
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 16),
+                _SheetLabeled(
+                  label: '작성일',
+                  child: Text(
+                    created,
+                    style: const TextStyle(fontSize: 15, color: _kText),
                   ),
                 ),
-                if (meta.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    meta,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: MapUiColors.accent,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 14),
+                const SizedBox(height: 16),
+                _SheetLabeled(
+                  label: '설명',
+                  child: _editing
+                      ? TextField(
+                          controller: _desc,
+                          maxLines: 5,
+                          style: const TextStyle(fontSize: 15, color: _kText),
+                          decoration: _sheetFieldDecoration(label: '설명')
+                              .copyWith(
+                            labelText: null,
+                            hintText: '설명을 입력해 주세요',
+                          ),
+                        )
+                      : Text(
+                          (r.description ?? '').isEmpty
+                              ? '(설명 없음)'
+                              : r.description!,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            height: 1.45,
+                            color: _kText,
+                          ),
+                        ),
+                ),
                 if (_editing) ...[
-                  TextField(
-                    controller: _desc,
-                    maxLines: 5,
-                    style: const TextStyle(fontSize: 15, color: _kText),
-                    decoration: _sheetFieldDecoration(label: '설명'),
-                  ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   _ImageEditBlock(
                     remoteUrl: _clearImage ? null : _currentImgUrl,
                     localPath: _localImagePath,
@@ -1672,30 +1745,15 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                       _currentImgUrl = null;
                     }),
                   ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '유형·위치는 수정할 수 없습니다.',
-                    style: TextStyle(fontSize: 12, color: _kMuted),
-                  ),
-                ] else ...[
-                  Text(
-                    (r.description ?? '').isEmpty ? '(설명 없음)' : r.description!,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      height: 1.45,
-                      color: _kText,
+                ] else if (resolveMediaUrl(_currentImgUrl) != null) ...[
+                  const SizedBox(height: 16),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: MediaCoverImage(
+                      url: _currentImgUrl,
+                      expanded: true,
                     ),
                   ),
-                  if (resolveMediaUrl(_currentImgUrl) != null) ...[
-                    const SizedBox(height: 12),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: MediaCoverImage(
-                        url: _currentImgUrl,
-                        expanded: true,
-                      ),
-                    ),
-                  ],
                 ],
               ],
             ),
@@ -1742,6 +1800,10 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                     onPressed: () {
                       setState(() {
                         _editing = false;
+                        final t = r.type?.trim();
+                        _type = (t != null && t.isNotEmpty)
+                            ? t
+                            : reportTypes.first;
                         _desc.text = r.description ?? '';
                         _localImagePath = null;
                         _clearImage = false;
@@ -1926,6 +1988,10 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
     try {
       await context.read<FeedbackRepository>().deleteFeedback(id);
       if (!mounted) return;
+      context.read<MapProvider>().removeFeedbackById(
+            id,
+            gridId: _toIntId(widget.feedback.gridId),
+          );
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context, true);
       messenger.showSnackBar(const SnackBar(content: Text('피드백이 삭제되었습니다')));
@@ -1949,7 +2015,7 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
     final f = widget.feedback;
     final mq = MediaQuery.of(context);
     final bottomPad = 24 + mq.viewPadding.bottom + mq.viewInsets.bottom;
-    final date = f.createdAt?.split('T').first ?? '';
+    final created = _formatDateTime(f.createdAt) ?? '-';
 
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(16, 8, 16, bottomPad),
@@ -1966,139 +2032,138 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  f.safetyFeeling ?? '피드백',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: _kText,
+                _SheetLabeled(
+                  label: '안전감',
+                  child: _editing
+                      ? DropdownButtonFormField<String>(
+                          // ignore: deprecated_member_use
+                          value: _feeling,
+                          items: _safetyFeelings
+                              .map(
+                                (e) => DropdownMenuItem(
+                                  value: e,
+                                  child: Text(e),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) {
+                            if (v != null) setState(() => _feeling = v);
+                          },
+                          decoration: _sheetFieldDecoration(label: '안전감')
+                              .copyWith(labelText: null),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            color: _kText,
+                          ),
+                        )
+                      : Text(
+                          f.safetyFeeling ?? '피드백',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: _kText,
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 16),
+                _SheetLabeled(
+                  label: '작성일',
+                  child: Text(
+                    created,
+                    style: const TextStyle(fontSize: 15, color: _kText),
                   ),
                 ),
-                if (date.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    date,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: MapUiColors.accent,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-                if (!_editing && f.tags.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: f.tags
-                        .map(
-                          (t) => Chip(
-                            label: Text(
-                              t,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: _kText,
+                const SizedBox(height: 16),
+                _SheetLabeled(
+                  label: '코멘트',
+                  child: _editing
+                      ? TextField(
+                          controller: _comment,
+                          maxLines: 5,
+                          style: const TextStyle(fontSize: 15, color: _kText),
+                          decoration: _sheetFieldDecoration(label: '코멘트')
+                              .copyWith(
+                            labelText: null,
+                            hintText: '의견을 입력해 주세요',
+                          ),
+                        )
+                      : Text(
+                          (f.comment ?? '').isEmpty
+                              ? '(코멘트 없음)'
+                              : f.comment!,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            height: 1.45,
+                            color: _kText,
+                          ),
+                        ),
+                ),
+                if (_editing) ...[
+                  const SizedBox(height: 16),
+                  _SheetLabeled(
+                    label: '태그',
+                    child: _tagsLoading
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(
+                              child: SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             ),
-                            backgroundColor: Colors.white,
-                            side: const BorderSide(color: Color(0xFFCBD5E1)),
-                            visualDensity: VisualDensity.compact,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        )
-                        .toList(),
+                          )
+                        : _allTags.isEmpty
+                            ? const Text(
+                                '등록된 태그가 없습니다',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: _kMuted,
+                                ),
+                              )
+                            : Wrap(
+                                spacing: 8,
+                                runSpacing: 6,
+                                children: _allTags.map((t) {
+                                  final selected =
+                                      _selectedTagIds.contains(t.id);
+                                  return FilterChip(
+                                    label: Text(
+                                      t.name,
+                                      style: TextStyle(
+                                        color: selected
+                                            ? MapUiColors.accent
+                                            : _kText,
+                                        fontWeight: selected
+                                            ? FontWeight.w700
+                                            : FontWeight.w500,
+                                      ),
+                                    ),
+                                    selected: selected,
+                                    backgroundColor: Colors.white,
+                                    selectedColor: MapUiColors.accentSoft,
+                                    checkmarkColor: MapUiColors.accent,
+                                    side: BorderSide(
+                                      color: selected
+                                          ? MapUiColors.accent
+                                          : const Color(0xFFCBD5E1),
+                                    ),
+                                    onSelected: (v) {
+                                      setState(() {
+                                        if (v) {
+                                          _selectedTagIds.add(t.id);
+                                        } else {
+                                          _selectedTagIds.remove(t.id);
+                                        }
+                                      });
+                                    },
+                                  );
+                                }).toList(),
+                              ),
                   ),
-                ],
-                const SizedBox(height: 14),
-                if (_editing) ...[
-                  DropdownButtonFormField<String>(
-                    // ignore: deprecated_member_use
-                    value: _feeling,
-                    items: _safetyFeelings
-                        .map(
-                          (e) => DropdownMenuItem(value: e, child: Text(e)),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _feeling = v);
-                    },
-                    decoration: _sheetFieldDecoration(label: '안전감'),
-                    style: const TextStyle(fontSize: 15, color: _kText),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _comment,
-                    maxLines: 4,
-                    style: const TextStyle(fontSize: 15, color: _kText),
-                    decoration: _sheetFieldDecoration(label: '코멘트'),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    '태그',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                      color: _kText,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_tagsLoading)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      child: Center(
-                        child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    )
-                  else if (_allTags.isEmpty)
-                    const Text(
-                      '등록된 태그가 없습니다',
-                      style: TextStyle(fontSize: 13, color: _kMuted),
-                    )
-                  else
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: _allTags.map((t) {
-                        final selected = _selectedTagIds.contains(t.id);
-                        return FilterChip(
-                          label: Text(
-                            t.name,
-                            style: TextStyle(
-                              color: selected
-                                  ? MapUiColors.accent
-                                  : _kText,
-                              fontWeight: selected
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
-                            ),
-                          ),
-                          selected: selected,
-                          backgroundColor: Colors.white,
-                          selectedColor: MapUiColors.accentSoft,
-                          checkmarkColor: MapUiColors.accent,
-                          side: BorderSide(
-                            color: selected
-                                ? MapUiColors.accent
-                                : const Color(0xFFCBD5E1),
-                          ),
-                          onSelected: (v) {
-                            setState(() {
-                              if (v) {
-                                _selectedTagIds.add(t.id);
-                              } else {
-                                _selectedTagIds.remove(t.id);
-                              }
-                            });
-                          },
-                        );
-                      }).toList(),
-                    ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   _ImageEditBlock(
                     remoteUrl: _clearImage ? null : _currentImgUrl,
                     localPath: _localImagePath,
@@ -2110,16 +2175,38 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                     }),
                   ),
                 ] else ...[
-                  Text(
-                    (f.comment ?? '').isEmpty ? '(코멘트 없음)' : f.comment!,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      height: 1.45,
-                      color: _kText,
+                  if (f.tags.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    _SheetLabeled(
+                      label: '태그',
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: f.tags
+                            .map(
+                              (t) => Chip(
+                                label: Text(
+                                  t,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: _kText,
+                                  ),
+                                ),
+                                backgroundColor: Colors.white,
+                                side: const BorderSide(
+                                  color: Color(0xFFCBD5E1),
+                                ),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            )
+                            .toList(),
+                      ),
                     ),
-                  ),
+                  ],
                   if (resolveMediaUrl(_currentImgUrl) != null) ...[
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 16),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
                       child: MediaCoverImage(
@@ -2174,6 +2261,14 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                         _localImagePath = null;
                         _clearImage = false;
                         _currentImgUrl = f.imgUrl;
+                        final names = f.tags.map((e) => e.trim()).toSet();
+                        _selectedTagIds
+                          ..clear()
+                          ..addAll(
+                            _allTags
+                                .where((t) => names.contains(t.name))
+                                .map((t) => t.id),
+                          );
                       });
                     },
                     child: const Text('취소'),
