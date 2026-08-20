@@ -5,6 +5,10 @@ String? resolveMediaUrl(String? url) {
   if (url == null) return null;
   final trimmed = url.trim();
   if (trimmed.isEmpty) return null;
+  final lower = trimmed.toLowerCase();
+  if (lower == 'null' || lower == 'undefined' || lower == 'none') {
+    return null;
+  }
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }

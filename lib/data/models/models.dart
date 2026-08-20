@@ -1,4 +1,5 @@
-/// pathing utility
+import 'dart:convert';
+
 double? _asDouble(dynamic v) {
   if (v == null) return null;
   if (v is num) return v.toDouble();
@@ -23,6 +24,24 @@ bool? _asBool(dynamic v) {
     if (s == 'false' || s == '0' || s == 'n' || s == 'no') return false;
   }
   return null;
+}
+
+/// FCM/JS Date·KST 벽시계 문자열 → ISO8601. 실패 시 null.
+String? _normalizeDateTimeString(dynamic v) {
+  if (v == null) return null;
+  final s = v.toString().trim();
+  if (s.isEmpty) return null;
+
+  DateTime? parsed = DateTime.tryParse(s);
+  if (parsed == null && !s.contains('T') && RegExp(r'^\d{4}-\d{2}-\d{2} ').hasMatch(s)) {
+    parsed = DateTime.tryParse(s.replaceFirst(' ', 'T'));
+  }
+  if (parsed == null) {
+    final cleaned = s.replaceAll(RegExp(r'\s*\([^)]*\)\s*'), ' ').trim();
+    parsed = DateTime.tryParse(cleaned);
+  }
+  if (parsed == null) return null;
+  return parsed.toIso8601String();
 }
 
 // --- Auth ---
@@ -141,6 +160,26 @@ class GridDetail {
         feedbackCount: (j['feedback_count'] as num?)?.toInt() ?? 0,
         participantCount: (j['participant_count'] as num?)?.toInt() ?? 0,
       );
+
+  GridDetail copyWith({
+    List<Map<String, dynamic>>? recentFeedbacks,
+    List<Map<String, dynamic>>? activeReports,
+    int? feedbackCount,
+  }) =>
+      GridDetail(
+        gridId: gridId,
+        lat: lat,
+        lng: lng,
+        infraCount: infraCount,
+        safetyGrade: safetyGrade,
+        tags: tags,
+        topTag: topTag,
+        safetyFeelingRatio: safetyFeelingRatio,
+        recentFeedbacks: recentFeedbacks ?? this.recentFeedbacks,
+        activeReports: activeReports ?? this.activeReports,
+        feedbackCount: feedbackCount ?? this.feedbackCount,
+        participantCount: participantCount,
+      );
 }
 
 class ReportItem {
@@ -169,17 +208,118 @@ class ReportItem {
   final bool isAdminPosted;
 
   factory ReportItem.fromJson(Map<String, dynamic> j) => ReportItem(
-        id: (j['id'] as num).toInt(),
+        id: _asInt(j['id']) ?? 0,
         type: j['type'] as String?,
-        lat: (j['lat'] as num?)?.toDouble(),
-        lng: (j['lng'] as num?)?.toDouble(),
+        lat: _asDouble(j['lat'] ?? j['latitude']),
+        lng: _asDouble(j['lng'] ?? j['lnt'] ?? j['lon'] ?? j['longitude']),
         description: j['description'] as String?,
-        imgUrl: j['img_url'] as String?,
+        imgUrl: (j['img_url'] ?? j['imgUrl']) as String?,
         userNickname: j['user_nickname'] as String?,
-        createdAt: j['created_at']?.toString(),
-        expireAt: j['expire_at']?.toString(),
+        createdAt: _normalizeDateTimeString(j['created_at'] ?? j['createdAt']),
+        expireAt: _normalizeDateTimeString(j['expire_at'] ?? j['expireAt']),
         isAdminPosted: j['is_admin_posted'] == true,
       );
+
+  /// FCM data 구조:
+  /// `{ type: 'report', title: '...', body: { id, type, description, img_url, lat, lng, created_at } }`
+  /// Android는 body가 JSON 문자열. flatten(`body.lat`)·이중 JSON도 허용.
+  static bool isFcmReportPush(Map<String, dynamic> data) {
+    return data['type']?.toString().trim().toLowerCase() == 'report';
+  }
+
+  static ReportItem? fromFcmData(Map<String, dynamic> data) {
+    if (!isFcmReportPush(data) && _fcmReportFields(data) == null) return null;
+    final src = _fcmReportFields(data);
+    if (src == null) return null;
+    final id = _asInt(src['id'] ?? src['reportId'] ?? src['report_id']);
+    final lat = _asDouble(src['lat'] ?? src['latitude']);
+    final lng = _asDouble(
+      src['lng'] ?? src['lnt'] ?? src['lon'] ?? src['longitude'],
+    );
+    if (id == null || lat == null || lng == null) return null;
+    final rawType = src['type']?.toString().trim();
+    final type =
+        (rawType == null || rawType.isEmpty || rawType == 'report')
+            ? null
+            : rawType;
+    final desc = src['description']?.toString().trim();
+    final img = (src['img_url'] ?? src['imgUrl'])?.toString().trim();
+    final created = src['created_at'] ?? src['createdAt'];
+    final imgOk = img != null &&
+            img.isNotEmpty &&
+            img.toLowerCase() != 'null' &&
+            img.toLowerCase() != 'undefined'
+        ? img
+        : null;
+    return ReportItem(
+      id: id,
+      type: type,
+      lat: lat,
+      lng: lng,
+      description: (desc == null || desc.isEmpty) ? null : desc,
+      imgUrl: imgOk,
+      createdAt: _normalizeDateTimeString(created) ??
+          DateTime.now().toIso8601String(),
+    );
+  }
+
+  static Map<String, dynamic>? _fcmReportFields(Map<String, dynamic> data) {
+    final fromBody = _asStringKeyMap(data['body']);
+    if (fromBody != null) {
+      return _asStringKeyMap(fromBody['data']) ?? fromBody;
+    }
+
+    final flat = <String, dynamic>{};
+    for (final e in data.entries) {
+      final k = e.key.toString();
+      if (k.startsWith('body.') && k.length > 5) {
+        flat[k.substring(5)] = e.value;
+      } else if (k.startsWith('body[') && k.endsWith(']') && k.length > 6) {
+        flat[k.substring(5, k.length - 1)] = e.value;
+      }
+    }
+    if (flat.isNotEmpty) {
+      return _asStringKeyMap(flat['data']) ?? flat;
+    }
+
+    if (_asInt(data['id'] ?? data['reportId'] ?? data['report_id']) != null) {
+      return data;
+    }
+    return null;
+  }
+
+  static Map<String, dynamic>? _asStringKeyMap(dynamic v) {
+    if (v is Map) return Map<String, dynamic>.from(v);
+    if (v is String) {
+      var s = v.trim();
+      if (s.isEmpty || s == '[object Object]') return null;
+      for (var i = 0; i < 2; i++) {
+        try {
+          final decoded = jsonDecode(s);
+          if (decoded is Map) return Map<String, dynamic>.from(decoded);
+          if (decoded is String) {
+            s = decoded.trim();
+            continue;
+          }
+        } catch (_) {}
+        break;
+      }
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'type': type,
+        'lat': lat,
+        'lng': lng,
+        'description': description,
+        'img_url': imgUrl,
+        'user_nickname': userNickname,
+        'created_at': createdAt,
+        'expire_at': expireAt,
+        'is_admin_posted': isAdminPosted,
+      };
 }
 
 class CityEventItem {

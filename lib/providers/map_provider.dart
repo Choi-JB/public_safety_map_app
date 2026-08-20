@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -32,12 +33,13 @@ const kAccidentZoneLabel = {
   'schoolzone': '어린이보호구역',
 };
 
-class MapProvider extends ChangeNotifier {
+class MapProvider extends ChangeNotifier with WidgetsBindingObserver {
   MapProvider(this._mapRepo, {NearbyReportAlert? nearbyAlert})
       : _nearbyAlert = nearbyAlert;
 
   final MapRepository _mapRepo;
   NearbyReportAlert? _nearbyAlert;
+  bool _observingLifecycle = false;
 
   void bindNearbyAlert(NearbyReportAlert alert) {
     _nearbyAlert = alert;
@@ -73,6 +75,11 @@ class MapProvider extends ChangeNotifier {
   /// 비용이 없지만, 제보/행사는 화면 반경의 절반 이상 움직였을 때만 재조회한다.
   LatLng? _lastLiveFetchCenter;
 
+  /// FCM으로 넣은 임시 제보. API 재조회 후에도 서버에 아직 없으면 유지한다.
+  final Map<int, ReportItem> _fcmTempReports = {};
+
+  static const _prefsPendingFcmReportsKey = 'fcm_pending_reports_v1';
+
   /// 캐시용 마지막 행정 키 (siDo|guGun)
   String? _lastAccidentRegionKey;
   Timer? _accidentDebounce;
@@ -95,6 +102,17 @@ class MapProvider extends ChangeNotifier {
       final z = prefs.getDouble(_prefsZoomKey);
       if (z != null) zoom = safeZoom(z);
     } catch (_) {}
+    if (!_observingLifecycle) {
+      WidgetsBinding.instance.addObserver(this);
+      _observingLifecycle = true;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(hydratePendingFcmReports());
+    }
   }
 
   Future<void> _persistLastPosition() async {
@@ -314,6 +332,7 @@ class MapProvider extends ChangeNotifier {
             .where((e) => isValidLatLng(e.lat, e.lng))
             .toList();
         _lastLiveFetchCenter = newCenter;
+        _mergeFcmTempReports();
       }
 
       if (infraVisible) await refreshInfra(silent: true);
@@ -587,6 +606,121 @@ class MapProvider extends ChangeNotifier {
     );
   }
 
+  /// 마이페이지에서 제보 삭제 시 지도 마커·격자 패널에서도 제거.
+  void removeReportById(int reportId) {
+    _fcmTempReports.remove(reportId);
+    final next = reports.where((r) => r.id != reportId).toList();
+    final reportsChanged = next.length != reports.length;
+    reports = next;
+
+    final d = selectedGridDetail;
+    if (d != null) {
+      final filtered = d.activeReports.where((r) {
+        final id = r['id'];
+        if (id is num) return id.toInt() != reportId;
+        if (id is String) return int.tryParse(id) != reportId;
+        return true;
+      }).toList();
+      if (filtered.length != d.activeReports.length) {
+        selectedGridDetail = d.copyWith(activeReports: filtered);
+      }
+    }
+    if (reportsChanged || d != selectedGridDetail) notifyListeners();
+  }
+
+  /// 마이페이지에서 피드백 삭제 시 격자 상세 최근 피드백에서도 제거.
+  void removeFeedbackById(int feedbackId, {int? gridId}) {
+    final d = selectedGridDetail;
+    if (d == null) return;
+    if (gridId != null && d.gridId != gridId) return;
+
+    final filtered = d.recentFeedbacks.where((fb) {
+      final id = fb['id'];
+      if (id is num) return id.toInt() != feedbackId;
+      if (id is String) return int.tryParse(id) != feedbackId;
+      return true;
+    }).toList();
+    if (filtered.length == d.recentFeedbacks.length) return;
+
+    final removed = d.recentFeedbacks.length - filtered.length;
+    selectedGridDetail = d.copyWith(
+      recentFeedbacks: filtered,
+      feedbackCount: (d.feedbackCount - removed).clamp(0, 1 << 30),
+    );
+    notifyListeners();
+  }
+
+  /// FCM 제보 푸시 → 지도에 임시 마커. 같은 id면 교체.
+  void upsertReportFromPush(ReportItem item) {
+    if (!isValidLatLng(item.lat, item.lng)) return;
+    _fcmTempReports[item.id] = item;
+    _nearbyAlert?.cacheReport(item);
+    reports = [
+      item,
+      ...reports.where((r) => r.id != item.id),
+    ];
+    notifyListeners();
+  }
+
+  void _mergeFcmTempReports() {
+    if (_fcmTempReports.isEmpty) return;
+    final fromApi = {for (final r in reports) r.id};
+    _fcmTempReports.removeWhere((id, _) => fromApi.contains(id));
+    if (_fcmTempReports.isEmpty) return;
+    reports = [
+      ..._fcmTempReports.values,
+      ...reports,
+    ];
+  }
+
+  /// 백그라운드 isolate에서 MapProvider 없이 적재.
+  static Future<void> persistPendingFcmReport(ReportItem item) async {
+    if (!isValidLatLng(item.lat, item.lng)) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final current = _decodePendingFcmReports(prefs.getString(_prefsPendingFcmReportsKey));
+      final next = [
+        item,
+        ...current.where((r) => r.id != item.id),
+      ].take(50).toList();
+      await prefs.setString(
+        _prefsPendingFcmReportsKey,
+        jsonEncode(next.map((e) => e.toJson()).toList()),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> hydratePendingFcmReports() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final pending =
+          _decodePendingFcmReports(prefs.getString(_prefsPendingFcmReportsKey));
+      if (pending.isEmpty) return;
+      await prefs.remove(_prefsPendingFcmReportsKey);
+      for (final item in pending) {
+        if (!isValidLatLng(item.lat, item.lng)) continue;
+        upsertReportFromPush(item);
+      }
+    } catch (_) {}
+  }
+
+  static List<ReportItem> _decodePendingFcmReports(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map>()
+          .map((e) => ReportItem.fromJson(Map<String, dynamic>.from(e)))
+          .where((r) => r.id != 0 && isValidLatLng(r.lat, r.lng))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   int _radiusForZoom(double z) {
     final safe = safeZoom(z);
     if (safe >= 17) return 280;
@@ -599,6 +733,10 @@ class MapProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_observingLifecycle) {
+      WidgetsBinding.instance.removeObserver(this);
+      _observingLifecycle = false;
+    }
     _mapFocusingTimeout?.cancel();
     _cancelAccidentDebounce();
     super.dispose();
