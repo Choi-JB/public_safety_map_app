@@ -172,6 +172,8 @@ class _MapPageState extends State<MapPage>
   bool _wasArrived = false;
   NavProvider? _navListened;
   MapProvider? _mapListened;
+  AuthProvider? _authListened;
+  bool? _wasLoggedIn;
 
   @override
   void initState() {
@@ -211,6 +213,13 @@ class _MapPageState extends State<MapPage>
       _mapListened = map;
       map.addListener(_onMapProviderChanged);
     }
+    final auth = context.read<AuthProvider>();
+    if (!identical(_authListened, auth)) {
+      _authListened?.removeListener(_onAuthProviderChanged);
+      _authListened = auth;
+      _wasLoggedIn = auth.isLoggedIn;
+      auth.addListener(_onAuthProviderChanged);
+    }
   }
 
   @override
@@ -244,6 +253,9 @@ class _MapPageState extends State<MapPage>
       } else {
         _onMapScreenVisibilityMaybeResumed();
       }
+      if (_panelTab == MapPanelTab.myReport) {
+        unawaited(_loadMyReports());
+      }
     } else {
       // 다른 화면: idle 정지 (6-A)
       _idleFollowTimer?.cancel();
@@ -255,6 +267,25 @@ class _MapPageState extends State<MapPage>
         WidgetsBinding.instance.addPostFrameCallback((_) => _onRouteChanged());
       }
     }
+  }
+
+  void _onAuthProviderChanged() {
+    if (!mounted) return;
+    final auth = _authListened;
+    if (auth == null) return;
+    final loggedIn = auth.isLoggedIn;
+    if (_wasLoggedIn == loggedIn) return;
+    _wasLoggedIn = loggedIn;
+    if (_panelTab == MapPanelTab.myReport) {
+      unawaited(_loadMyReports());
+      return;
+    }
+    setState(() {
+      _myReports = [];
+      _myError = null;
+      _myLoading = false;
+      _selectedMyReportId = null;
+    });
   }
 
   void _onMapProviderChanged() {
@@ -799,6 +830,8 @@ class _MapPageState extends State<MapPage>
     _navListened = null;
     _mapListened?.removeListener(_onMapProviderChanged);
     _mapListened = null;
+    _authListened?.removeListener(_onAuthProviderChanged);
+    _authListened = null;
     _openReportSub?.cancel();
     _openAccidentSub?.cancel();
     _posSub?.cancel();

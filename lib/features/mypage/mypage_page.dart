@@ -607,7 +607,7 @@ class _MyPageState extends State<MyPage> {
     if (ok != true || !mounted) return;
     await auth.logout();
     if (!mounted) return;
-    context.pop();
+    context.go('/map');
   }
 
   @override
