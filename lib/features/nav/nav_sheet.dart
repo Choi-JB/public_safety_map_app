@@ -101,91 +101,30 @@ class _NavSheetState extends State<NavSheet> {
     final body = Padding(
       key: _sizeKey,
       padding: EdgeInsets.fromLTRB(14, _collapsed ? 6 : 10, 14, _collapsed ? 8 : 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+            child: Column(
+        mainAxisSize: widget.embedInParent
+            ? MainAxisSize.max
+            : MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: canCollapse ? () => _setCollapsed(!_collapsed) : null,
-            onVerticalDragEnd: canCollapse
-                ? (d) {
-                    final vy = d.primaryVelocity ?? 0;
-                    if (vy > 200) {
-                      _setCollapsed(true);
-                    } else if (vy < -200) {
-                      _setCollapsed(false);
+          if (!widget.embedInParent)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: canCollapse ? () => _setCollapsed(!_collapsed) : null,
+              onVerticalDragEnd: canCollapse
+                  ? (d) {
+                      final vy = d.primaryVelocity ?? 0;
+                      if (vy > 200) {
+                        _setCollapsed(true);
+                      } else if (vy < -200) {
+                        _setCollapsed(false);
+                      }
                     }
-                  }
-                : null,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (canCollapse)
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFCBD5E1),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                Row(
-                  children: [
-                    Text(
-                      _collapsed ? '선택한 경로' : '경로 선택',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                        color: Color(0xFF0F172A),
-                      ),
-                    ),
-                    const Spacer(),
-                    if (canCollapse)
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 32,
-                          minHeight: 32,
-                        ),
-                        tooltip: _collapsed ? '목록 펼치기' : '선택한 경로만 보기',
-                        onPressed: () => _setCollapsed(!_collapsed),
-                        icon: Icon(
-                          _collapsed
-                              ? Icons.keyboard_arrow_up
-                              : Icons.keyboard_arrow_down,
-                          color: const Color(0xFF0F172A),
-                        ),
-                      ),
-                    Material(
-                      color: Colors.white,
-                      elevation: 2,
-                      shadowColor: Colors.black26,
-                      shape: const CircleBorder(),
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: () =>
-                            context.read<NavProvider>().toggleActive(),
-                        child: const SizedBox(
-                          width: 36,
-                          height: 36,
-                          child: Icon(
-                            Icons.close,
-                            size: 20,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  : null,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+              ),
             ),
-          ),
           if (nav.loading) ...[
             const SizedBox(height: 10),
             const LinearProgressIndicator(minHeight: 3),
@@ -238,37 +177,68 @@ class _NavSheetState extends State<NavSheet> {
                 widget.onGuidanceStarted?.call();
               },
             ),
-          ] else if (!_collapsed && nav.choiceCards.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: maxListH),
-              child: ListView.separated(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: nav.choiceCards.length,
-                separatorBuilder: (_, _) => const Divider(
-                  height: 1,
-                  color: Color(0xFFE2E8F0),
-                ),
-                itemBuilder: (context, index) {
-                  final c = nav.choiceCards[index];
-                  final isSel = nav.selected?.id == c.id;
-                  return _RouteOptionTile(
-                    candidate: c,
-                    selected: isSel,
-                    onTap: () => _onCardTap(c),
-                    onStartGuidance: () {
-                      context.read<NavProvider>().startGuidance(
-                            c,
-                            myPos: widget.myPos,
+          ] else if (!_collapsed && nav.choiceCards.isNotEmpty)
+            widget.embedInParent
+                ? Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: ListView.separated(
+                        padding: EdgeInsets.zero,
+                        itemCount: nav.choiceCards.length,
+                        separatorBuilder: (_, _) => const Divider(
+                          height: 1,
+                          color: Color(0xFFE2E8F0),
+                        ),
+                        itemBuilder: (context, index) {
+                          final c = nav.choiceCards[index];
+                          final isSel = nav.selected?.id == c.id;
+                          return _RouteOptionTile(
+                            candidate: c,
+                            selected: isSel,
+                            onTap: () => _onCardTap(c),
+                            onStartGuidance: () {
+                              context.read<NavProvider>().startGuidance(
+                                    c,
+                                    myPos: widget.myPos,
+                                  );
+                              widget.onGuidanceStarted?.call();
+                            },
                           );
-                      widget.onGuidanceStarted?.call();
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
+                        },
+                      ),
+                    ),
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: maxListH),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        itemCount: nav.choiceCards.length,
+                        separatorBuilder: (_, _) => const Divider(
+                          height: 1,
+                          color: Color(0xFFE2E8F0),
+                        ),
+                        itemBuilder: (context, index) {
+                          final c = nav.choiceCards[index];
+                          final isSel = nav.selected?.id == c.id;
+                          return _RouteOptionTile(
+                            candidate: c,
+                            selected: isSel,
+                            onTap: () => _onCardTap(c),
+                            onStartGuidance: () {
+                              context.read<NavProvider>().startGuidance(
+                                    c,
+                                    myPos: widget.myPos,
+                                  );
+                              widget.onGuidanceStarted?.call();
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ),
           if (!_collapsed && nav.destination != null) ...[
             const SizedBox(height: 10),
             Material(

@@ -55,6 +55,10 @@ class NavOriginMarker extends StatelessWidget {
           width: 40,
           height: 48,
           alignment: Alignment.topCenter,
+          child: GestureDetector(
+          onTap: nav.guiding
+              ? null
+              : () => context.read<NavProvider>().clearOrigin(),
           child: const Icon(
             Icons.location_on,
             color: Color(0xFF16A34A),
@@ -64,8 +68,9 @@ class NavOriginMarker extends StatelessWidget {
                 color: Colors.black38,
                 blurRadius: 4,
                 offset: Offset(0, 1),
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -93,17 +98,22 @@ class NavDestinationMarker extends StatelessWidget {
           width: 40,
           height: 48,
           alignment: Alignment.topCenter,
-          child: const Icon(
-            Icons.location_on,
-            color: Color(0xFFDC2626),
-            size: 40,
-            shadows: [
-              Shadow(
-                color: Colors.black38,
-                blurRadius: 4,
-                offset: Offset(0, 1),
-              ),
-            ],
+          child: GestureDetector(
+  onTap: nav.guiding
+      ? null
+      : () => context.read<NavProvider>().clearDestination(),
+            child: const Icon(
+              Icons.location_on,
+              color: Color(0xFFDC2626),
+              size: 40,
+              shadows: [
+                Shadow(
+                  color: Colors.black38,
+                  blurRadius: 4,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            ),
           ),
         ),
       ],

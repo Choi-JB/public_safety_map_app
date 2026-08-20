@@ -42,7 +42,7 @@ const double _defaultMapZoom = 17;
 const double _myLocationZoom = 17;
 
 /// 하단 패널 탭 (웹 좌측 레일: 격자 / 행사 / 제보 / 내 제보)
-enum MapPanelTab { grid, event, report, myReport }
+enum MapPanelTab { grid, event, report, nav }
 
 String _accidentChipLabel(MapProvider map) {
   if (!map.accidentZonesVisible) return '위험구간';
@@ -144,12 +144,6 @@ class _MapPageState extends State<MapPage>
 
   int? _selectedReportId;
   int? _selectedEventId;
-  Object? _selectedMyReportId;
-
-  List<MyReport> _myReports = [];
-  bool _myLoading = false;
-  String? _myError;
-
   bool _nearbyMenu = false;
   bool _gridMenu = false;
   bool _accidentMenu = false;
@@ -846,9 +840,12 @@ class _MapPageState extends State<MapPage>
     if (!mounted) return;
     final nav = _navListened;
     if (nav == null) return;
-
     if (_navWasActive && !nav.active) {
-      _restorePreRouteCamera();
+    _restorePreRouteCamera();
+    _dismissLongPressMenu();
+    }
+    if (nav.origin == null) {
+      _pinnedNavOrigin = null;
     }
     _navWasActive = nav.active;
 
@@ -1376,8 +1373,12 @@ class _MapPageState extends State<MapPage>
     }
     _dismissLongPressMenu();
     if (nav.destination != null) {
-      unawaited(nav.plan());
-    }
+  unawaited(nav.plan().then((_) {
+      if (mounted) _showNavPanel();
+    }));
+  } else {
+    _showNavPanel(); // 출발만 정했을 때도 길찾기 탭 안내
+}
   }
 
   Future<void> _onLongPressSetDestination() async {
@@ -1460,6 +1461,8 @@ class _MapPageState extends State<MapPage>
     }
     nav.setDestination(point);
     await nav.plan();
+    _dismissLongPressMenu();
+    _showNavPanel();
     if (!mounted) return;
 
     final mid = nav.selected?.points;
@@ -1467,42 +1470,6 @@ class _MapPageState extends State<MapPage>
         ? mid[mid.length ~/ 2]
         : point;
     await _loadAround(focus, 16);
-  }
-
-  Future<void> _loadMyReports() async {
-    final auth = context.read<AuthProvider>();
-    if (!auth.isLoggedIn) {
-      setState(() {
-        _myReports = [];
-        _myError = '로그인 후 이용할 수 있습니다';
-      });
-      return;
-    }
-    setState(() {
-      _myLoading = true;
-      _myError = null;
-    });
-    try {
-      final list =
-          await context.read<MyPageRepository>().fetchReports(limit: 30);
-      if (!mounted) return;
-      setState(() {
-        _myReports = list;
-        _myLoading = false;
-      });
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _myError = userFacingError(e);
-        _myLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _myError = userFacingError(e);
-        _myLoading = false;
-      });
-    }
   }
 
   bool get _panelExpanded =>
@@ -1545,8 +1512,8 @@ class _MapPageState extends State<MapPage>
             }
           }
         }
-      case MapPanelTab.myReport:
-        break;
+      case MapPanelTab.nav:
+        return (screenH * 0.38).clamp(220.0, _maxPanelHeight(screenH));
       case MapPanelTab.grid:
         if (map.selectedGridDetail != null) {
           return (screenH * 0.42).clamp(240.0, _maxPanelHeight(screenH));
@@ -1603,12 +1570,17 @@ class _MapPageState extends State<MapPage>
     final same = _panelTab == tab;
     final wasOpen = _panelExpanded;
     setState(() => _panelTab = tab);
-    if (tab == MapPanelTab.myReport) _loadMyReports();
     if (same && wasOpen) {
       _collapsePanel();
     } else {
       _expandPanel();
     }
+  }
+  void _showNavPanel() {
+    _closeFilterMenus();
+    _onUserActivity();
+    setState(() => _panelTab = MapPanelTab.nav);
+    _expandPanel();
   }
 
   void _onPanelDragUpdate(
@@ -1839,48 +1811,28 @@ class _MapPageState extends State<MapPage>
     return '${short(a)} ~ ${short(b)}';
   }
 
-  void _onSelectMyReportFromPanel(MyReport r, MapProvider map) {
-    _onMapUserGesture();
-    setState(() => _selectedMyReportId = r.id);
-    final id = r.id is int ? r.id as int : int.tryParse('${r.id}');
-    if (id != null) {
-      for (final item in map.reports) {
-        if (item.id == id) {
-          _selectReport(item, moveMap: true);
-          return;
-        }
-      }
-    }
-    final p = tryLatLng(r.lat, r.lng);
-    if (p != null) {
-      _focusMapOn(p, zoom: 16);
-      _loadAround(p, 16);
-    }
-  }
-
   Widget _buildBottomPanelBody({
     required MapProvider map,
     required double screenH,
     required bool nestInParent,
   }) {
     return _PanelBody(
-      tab: _panelTab,
-      expanded: _panelExpanded,
-      map: map,
-      selectedReportId: _selectedReportId,
-      selectedEventId: _selectedEventId,
-      selectedMyReportId: _selectedMyReportId,
-      myReports: _myReports,
-      myLoading: _myLoading,
-      myError: _myError,
-      onUserActivity: _onUserActivity,
-      onSelectReport: (r) => _selectReport(r, moveMap: true),
-      onSelectEvent: (e) => _selectEvent(e, moveMap: true),
-      onSelectMyReport: (r) => _onSelectMyReportFromPanel(r, map),
-      formatRange: _formatRange,
-      onDragUpdate: (d) => _onPanelDragUpdate(d, screenH, map),
-      onDragEnd: (d) => _onPanelDragEnd(d, screenH, map),
-      nestInParent: nestInParent,
+    tab: _panelTab,
+    expanded: _panelExpanded,
+    map: map,
+    selectedReportId: _selectedReportId,   // ← 추가
+    selectedEventId: _selectedEventId,
+    myPos: _myPos,
+    onGuidanceStarted: _onGuidanceStartedFromSheet,
+    onRoutePreview: _fitSelectedRoute,   // ← 오타 수정
+    onUserActivity: _onUserActivity,
+    onSelectReport: (r) => _selectReport(r, moveMap: true),
+    onSelectEvent: (e) => _selectEvent(e, moveMap: true),
+    // onSelectMyReport 삭제
+    formatRange: _formatRange,
+    onDragUpdate: (d) => _onPanelDragUpdate(d, screenH, map),
+    onDragEnd: (d) => _onPanelDragEnd(d, screenH, map),
+    nestInParent: nestInParent,
     );
   }
 
@@ -1894,87 +1846,6 @@ class _MapPageState extends State<MapPage>
     unawaited(_syncGuidanceNotification(context.read<NavProvider>()));
   }
 
-  /// 경로선택/안내 + 격자 패널을 빈 틈 없이 한 덩어리로
-  Widget _buildDockedBottomStack({
-    required NavProvider nav,
-    required MapProvider map,
-    required double screenH,
-    required double panelH,
-    required bool panelExpanded,
-  }) {
-    final panelSlice = panelExpanded
-        ? SizedBox(
-            height: panelH,
-            child: _buildBottomPanelBody(
-              map: map,
-              screenH: screenH,
-              nestInParent: true,
-            ),
-          )
-        : _buildBottomPanelBody(
-            map: map,
-            screenH: screenH,
-            nestInParent: true,
-          );
-
-    if (nav.guiding) {
-      return Material(
-        elevation: 10,
-        color: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            NavGuidanceBar(nav: nav, myPos: _myPos),
-            const Divider(height: 1, color: Color(0xFFE2E8F0)),
-            panelSlice,
-          ],
-        ),
-      );
-    }
-
-    if (nav.active) {
-      return Material(
-        elevation: 10,
-        color: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            NavSheet(
-              myPos: _myPos,
-              embedInParent: true,
-              onGuidanceStarted: _onGuidanceStartedFromSheet,
-              onRoutePreview: _fitSelectedRoute,
-            ),
-            const Divider(height: 1, color: Color(0xFFE2E8F0)),
-            panelSlice,
-          ],
-        ),
-      );
-    }
-
-    if (panelExpanded) {
-      return SizedBox(
-        height: panelH,
-        child: _buildBottomPanelBody(
-          map: map,
-          screenH: screenH,
-          nestInParent: false,
-        ),
-      );
-    }
-    return _buildBottomPanelBody(
-      map: map,
-      screenH: screenH,
-      nestInParent: false,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final map = context.watch<MapProvider>();
@@ -1986,14 +1857,9 @@ class _MapPageState extends State<MapPage>
     final panelH = _resolvePanelHeight(screenH, map);
     final panelExpanded = _panelExpanded || _panelDragging;
     // FAB: 합쳐진 하단 스택(경로선택/안내+격자) 바로 위
-    final double fabNavGap;
-    if (nav.guiding) {
-      fabNavGap = NavGuidanceBar.estimatedHeight + 6;
-    } else if (nav.active) {
-      fabNavGap = (nav.sheetHeight > 0 ? nav.sheetHeight : 180) + 6;
-    } else {
-      fabNavGap = 10;
-    }
+
+    // FAB: 하단 패널 바로 위
+    const fabNavGap = 10.0;
     final fabBottom = railH + panelH + fabNavGap;
 
     return PopScope(
@@ -2605,13 +2471,20 @@ class _MapPageState extends State<MapPage>
                   : const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
               height: panelH,
-              child: _buildDockedBottomStack(
-                nav: nav,
-                map: map,
-                screenH: screenH,
-                panelH: panelH,
-                panelExpanded: panelExpanded,
-              ),
+              child: panelExpanded
+                  ? SizedBox(
+                      height: panelH,
+                      child: _buildBottomPanelBody(
+                        map: map,
+                        screenH: screenH,
+                        nestInParent: false,
+                      ),
+                    )
+                  : _buildBottomPanelBody(
+                      map: map,
+                      screenH: screenH,
+                      nestInParent: false,
+                    ),
             ),
           ),
 
@@ -2691,21 +2564,20 @@ class _MapPageState extends State<MapPage>
                           selected: _panelTab == MapPanelTab.report,
                           onTap: () => _openPanel(MapPanelTab.report),
                         ),
-                        _RailTab(
-                          iconSelected: Icons.person,
-                          iconUnselected: Icons.person_outline,
-                          label: '내 제보',
-                          selected: _panelTab == MapPanelTab.myReport,
-                          onTap: () => _openPanel(MapPanelTab.myReport),
-                    ),
-                  ],
+                      _RailTab(
+                        iconSelected: Icons.directions,
+                        iconUnselected: Icons.directions_outlined,
+                        label: '길찾기',
+                        selected: _panelTab == MapPanelTab.nav,
+                        onTap: () => _openPanel(MapPanelTab.nav),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-          ),
-        ),
             ),
           ),
-
+        ),
           // 마이페이지 「위치로 이동」 대기 스피너
           if (map.mapFocusing)
             const Positioned.fill(
@@ -3135,49 +3007,44 @@ class _RailTab extends StatelessWidget {
 
 class _PanelBody extends StatelessWidget {
   const _PanelBody({
-    required this.tab,
-    required this.expanded,
-    required this.map,
-    required this.selectedReportId,
-    required this.selectedEventId,
-    required this.selectedMyReportId,
-    required this.myReports,
-    required this.myLoading,
-    required this.myError,
-    required this.onUserActivity,
-    required this.onSelectReport,
-    required this.onSelectEvent,
-    required this.onSelectMyReport,
-    required this.formatRange,
-    required this.onDragUpdate,
-    required this.onDragEnd,
-    this.nestInParent = false,
+  required this.tab,
+  required this.expanded,
+  required this.map,
+  required this.selectedReportId,
+  required this.selectedEventId,
+  required this.myPos,
+  required this.onGuidanceStarted,
+  required this.onRoutePreview,
+  required this.onUserActivity,
+  required this.onSelectReport,
+  required this.onSelectEvent,
+  required this.formatRange,
+  required this.onDragUpdate,
+  required this.onDragEnd,
+  this.nestInParent = false,
   });
 
+  final int? selectedReportId;
+  final int? selectedEventId;
+  final LatLng? myPos;
+  final VoidCallback onGuidanceStarted;
+  final VoidCallback onRoutePreview;
   final MapPanelTab tab;
   final bool expanded;
   final MapProvider map;
-  final int? selectedReportId;
-  final int? selectedEventId;
-  final Object? selectedMyReportId;
-  final List<MyReport> myReports;
-  final bool myLoading;
-  final String? myError;
   final VoidCallback onUserActivity;
   final void Function(ReportItem) onSelectReport;
   final void Function(CityEventItem) onSelectEvent;
-  final void Function(MyReport) onSelectMyReport;
   final String Function(String?, String?) formatRange;
   final void Function(DragUpdateDetails) onDragUpdate;
   final void Function(DragEndDetails) onDragEnd;
-  /// true면 바깥 Material에 포함 (자체 elevation/radius 없음)
   final bool nestInParent;
 
   String get _title => switch (tab) {
         MapPanelTab.grid => '격자 정보',
         MapPanelTab.event => '행사 · 도시정보',
         MapPanelTab.report => '제보',
-        MapPanelTab.myReport => '내 제보',
+        MapPanelTab.nav => '길찾기',
       };
 
   @override
@@ -3308,35 +3175,31 @@ class _PanelBody extends StatelessWidget {
             );
           },
         );
-      case MapPanelTab.myReport:
-        if (myLoading) {
-          return const Center(child: CircularProgressIndicator());
+        case MapPanelTab.nav:
+        final nav = context.watch<NavProvider>();
+
+        if (nav.guiding) {
+          return NavGuidanceBar(nav: nav, myPos: myPos);
         }
-        if (myError != null) {
-          return Center(child: Text(myError!));
+        if (nav.active) {
+          return NavSheet(
+            myPos: myPos,
+            embedInParent: true,
+            onGuidanceStarted: onGuidanceStarted,
+            onRoutePreview: onRoutePreview,
+          );
         }
-        if (myReports.isEmpty) {
-          return const Center(child: Text('내 제보가 없습니다'));
-        }
-        return ListView.builder(
-          padding: const EdgeInsets.only(bottom: 12),
-          itemCount: myReports.length,
-          itemBuilder: (_, i) {
-            final r = myReports[i];
-            final createdAt = r.createdAt;
-            final meta = (createdAt == null || createdAt.isEmpty)
-                ? null
-                : createdAt.replaceFirst('T', ' ');
-            return ReportListCard(
-              type: '[${r.type ?? '제보'}] ${r.description ?? ''}',
-              description: '',
-              meta: meta != null && meta.length >= 16
-                  ? meta.substring(0, 16)
-                  : meta,
-              selected: r.id == selectedMyReportId,
-              onTap: () => onSelectMyReport(r),
-            );
-          },
+        return const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              '도착지를 정한 뒤 경로를 비교할 수 있습니다.\n\n'
+              '· 위 검색창에 장소를 입력하고 길찾기\n'
+              '· 지도를 길게 눌러 출발 또는 도착 지정',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF64748B), height: 1.5),
+            ),
+          ),
         );
     }
   }

@@ -58,11 +58,13 @@ class NavProvider extends ChangeNotifier {
 
   void toggleActive({LatLng? myPos}) {
     active = !active;
+    
     if (active) {
       if (myPos != null) origin = myPos;
       if (sheetHeight <= 0) sheetHeight = _sheetHeightEstimate;
     } else {
       sheetHeight = 0;
+      origin = null;
       destination = null;
       clearRoute();
     }
@@ -84,6 +86,27 @@ class NavProvider extends ChangeNotifier {
   void setDestination(LatLng v) {
     destination = v;
     notifyListeners();
+  }
+
+  void clearOrigin() {
+    if (guiding) return;
+    origin = null;
+    notifyListeners();
+    endIfEmpty();
+  }
+  void clearDestination() {
+    if (guiding) return;
+    destination = null;
+    clearRoute(); // 경로선·카드만 제거, active는 유지
+    notifyListeners();
+    endIfEmpty();
+  }
+  
+  void endIfEmpty() {
+  if (guiding || !active) return;
+  if (origin == null && destination == null) {
+    toggleActive();
+    }
   }
 
   Future<void> setMode(NavMode m) async {
@@ -141,6 +164,7 @@ class NavProvider extends ChangeNotifier {
     compare = null;
     message = null;
     error = null;
+    origin = null;
     notifyListeners();
   }
 
