@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
@@ -166,9 +165,6 @@ class NearbyMonitor extends ChangeNotifier {
           notificationTitle: '주변 안전 감시 중',
           notificationText: '400m 안 제보·위험구간을 확인합니다',
           notificationChannelName: '주변 안전 감시',
-          notificationIcon:
-              AndroidResource(name: 'ic_stat_report_warning'),
-          color: Color(0xFFDC2626),
           enableWakeLock: true,
           setOngoing: true,
         ),
