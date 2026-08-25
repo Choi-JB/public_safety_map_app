@@ -15,6 +15,11 @@
 
 [APK 다운로드 링크]()
 
+[demo1.webm](https://github.com/user-attachments/assets/86229dfe-10b2-4132-8bd5-eb64caae1c0d)
+
+[demo2.webm](https://github.com/user-attachments/assets/42cb3c19-3b8a-40f5-b0fa-393057746a6e)
+
+
 테스트 가능 아이디
 
 | | |
@@ -223,3 +228,10 @@ flowchart TB
 - **FCM**: 서버 푸시 → 지도 마커 · (근접 시) 배너/알림함  
 - **NearbyMonitor**: GPS 기반 400m 감시 → Foreground Service 알림 + 로컬 알림  
 - 시스템 알림 권한이 꺼져 있으면 주변감시·알림 설정을 ON 할 수 없음 (설정 안내)
+
+
+## 역할 Role & Contribution
+앱 알림
+마이페이지
+ - 내 제보/피드백 확인, 수정, 삭제
+ - 알림 확인 및 설정
