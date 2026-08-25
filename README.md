@@ -108,7 +108,7 @@ flutterfire configure
 | 상태 관리 | Provider (`ChangeNotifier`) |
 | 라우팅 | go_router |
 | HTTP | Dio (+ CookieJar, SecureStorage) |
-| 지도 | flutter_map + OpenStreetMap |
+| 지도 | KakaoMap SDK |
 | 위치 | geolocator |
 | 로컬 DB | sqflite (격자·인프라 정적 데이터) |
 | 푸시 | Firebase Cloud Messaging + flutter_local_notifications |
