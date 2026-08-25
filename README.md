@@ -13,7 +13,7 @@
 
 ## 데모 DEMO
 
-[APK 다운로드 링크](https://github.com/Choi-JB/public_safety_map_app/releases/download/v1.0.0/app-release.apk)
+[📱 APK 다운로드](https://github.com/Choi-JB/public_safety_map_app/releases/download/v1.0.0/public-safety-map-app.v1.0.apk)
 
 [demo1.webm](https://github.com/user-attachments/assets/86229dfe-10b2-4132-8bd5-eb64caae1c0d)
 
